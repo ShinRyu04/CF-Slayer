@@ -1,8 +1,7 @@
-"""Replay a clearance with the exact UA the browser used.
+"""用浏览器求解时所用的完全相同的 UA 回放凭据。
 
-Hard rules from the research: same egress IP, same UA, ~30 min TTL, per-domain
-isolation. This module enforces the UA part; IP/TTL/domain are enforced by the
-caller (cache key + expiry, same host).
+研究得出的硬性规则：同出口 IP、同 UA、约 30 分钟 TTL、按域名隔离。
+本模块负责强制 UA 部分；IP/TTL/域名由调用方（缓存键与过期时间、同主机）保证。
 """
 
 from __future__ import annotations
@@ -12,8 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-#: Substrings that identify a Cloudflare interstitial instead of real content.
-CHALLENGE_MARKERS = (
+#: 用于识别 Cloudflare 拦截页而非真实内容的子串。
+挑战标记 = (
     b"just a moment",
     b"cf-chl",
     b"challenge-platform",
@@ -21,80 +20,79 @@ CHALLENGE_MARKERS = (
     b"enable javascript and cookies to continue",
 )
 
-#: Only the first chunk needs scanning; challenge pages are small and JS bundles
-#: in real pages can contain the markers in unrelated text.
-_SCAN_BYTES = 262_144
+#: 只扫描前一段；挑战页很小，而真实页面的 JS 包可能在其他文本里包含这些标记。
+_扫描字节数 = 262_144
 
 
 @dataclass(frozen=True, slots=True)
-class ReplayResult:
-    status: int
-    length: int
-    challenge_page: bool
-    elapsed_seconds: float
-    url: str
+class 回放结果:
+    状态码: int
+    长度: int
+    挑战页: bool
+    耗时秒: float
+    网址: str
 
 
-def is_challenge_page(status: int, body: bytes) -> bool:
-    """Status-only detection misses CF's 200-with-interstitial variants."""
-    if status in (403, 503):
+def 是挑战页(状态码: int, 正文: bytes) -> bool:
+    """只看状态码会漏掉 Cloudflare 的 200 + 拦截页变体。"""
+    if 状态码 in (403, 503):
         return True
-    head = body[:_SCAN_BYTES].lower()
-    return any(marker in head for marker in CHALLENGE_MARKERS)
+    开头 = 正文[:_扫描字节数].lower()
+    return any(标记 in 开头 for 标记 in 挑战标记)
 
 
-def replay(
-    url: str,
-    clearance: str,
-    user_agent: str,
-    domain: str = "",
+def 回放(
+    网址: str,
+    凭据: str,
+    用户代理: str,
+    域名: str = "",
     *,
-    timeout: float = 30.0,
-    session_factory: Any | None = None,
-) -> ReplayResult:
-    """GET ``url`` with ``cf_clearance`` + the solve-time UA.
+    超时: float = 30.0,
+    会话工厂: Any | None = None,
+) -> 回放结果:
+    """带上 ``cf_clearance`` 与求解时 UA GET ``网址``。
 
-    The cookie is sent as a host-only cookie for the requested URL, which is the
-    narrowest scope that still works for target domains and their subdomains.
+    饼干按目标网址的 host-only cookie 发送，这是对目标域名及其子域仍有效的
+    最小作用域。
     """
-    if not clearance:
-        raise ValueError("clearance must not be empty")
-    if not user_agent:
-        raise ValueError("user_agent must not be empty")
-    if domain and domain_of(url) != domain.lower().rstrip("."):
-        raise ValueError(f"clearance for {domain!r} cannot be replayed against {url!r}")
+    if not 凭据:
+        raise ValueError("凭据不能为空")
+    if not 用户代理:
+        raise ValueError("用户代理不能为空")
+    if 域名 and 提取域名(网址) != 域名.lower().rstrip("."):
+        raise ValueError(f"{域名!r} 的凭据不能用于回放 {网址!r}")
 
-    start = time.monotonic()
-    if session_factory is None:
+    开始时刻 = time.monotonic()
+    if 会话工厂 is None:
         from curl_cffi import requests as cffi_requests
 
-        def session_factory() -> Any:  # type: ignore[misc]
+        def 会话工厂() -> Any:  # type: ignore[misc]
             return cffi_requests.Session(impersonate="firefox")
 
-    with session_factory() as session:
-        response = session.get(
-            url,
+    with 会话工厂() as 会话:
+        响应 = 会话.get(
+            网址,
             headers={
-                "User-Agent": user_agent,
+                "User-Agent": 用户代理,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             },
-            cookies={"cf_clearance": clearance},
-            timeout=timeout,
+            cookies={"cf_clearance": 凭据},
+            timeout=超时,
         )
-        body: bytes = response.content or b""
-        status = int(response.status_code)
-        final_url = str(getattr(response, "url", url) or url)
+        正文: bytes = 响应.content or b""
+        状态码 = int(响应.status_code)
+        最终网址 = str(getattr(响应, "url", 网址) or 网址)
 
-    return ReplayResult(
-        status=status,
-        length=len(body),
-        challenge_page=is_challenge_page(status, body),
-        elapsed_seconds=round(time.monotonic() - start, 3),
-        url=final_url,
+    return 回放结果(
+        状态码=状态码,
+        长度=len(正文),
+        挑战页=是挑战页(状态码, 正文),
+        耗时秒=round(time.monotonic() - 开始时刻, 3),
+        网址=最终网址,
     )
 
 
-def domain_of(url: str) -> str:
-    host = urlsplit(url).hostname or ""
-    return host.lower().rstrip(".")
+def 提取域名(网址: str) -> str:
+    主机名 = urlsplit(网址).hostname or ""
+    return 主机名.lower().rstrip(".")

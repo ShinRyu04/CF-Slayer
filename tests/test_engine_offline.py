@@ -5,159 +5,163 @@ from typing import Self
 
 import pytest
 
-from solver.engine import Backend, CamoufoxBackend, domain_of
-from solver.errors import SolveFailed, SolveTimeout
+from solver.engine import Camoufox后端, 后端, 提取域名
+from solver.errors import 求解失败, 求解超时
 
-UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+用户代理文本 = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) Gecko/20100101 Firefox/156.0"
+)
 
 
-class FakePage:
-    def __init__(self, context: FakeContext) -> None:
-        self._context = context
+class 假页面:
+    def __init__(self, 上下文: 假上下文) -> None:
+        self._上下文 = 上下文
 
     def goto(self, url: str, wait_until: str | None = None, timeout: int | None = None) -> None:
-        self._context.goto_calls.append((url, wait_until, timeout))
-        if self._context.raise_on_goto is not None:
-            raise self._context.raise_on_goto
+        self._上下文.跳转调用.append((url, wait_until, timeout))
+        if self._上下文.跳转时抛错 is not None:
+            raise self._上下文.跳转时抛错
 
     def wait_for_timeout(self, milliseconds: int) -> None:
-        self._context.polls += 1
+        self._上下文.轮询次数 += 1
 
     def evaluate(self, script: str) -> str:
         if "document.cookie" in script:
             return ""
         if "userAgent" in script:
-            return self._context.user_agent
-        raise AssertionError(f"unexpected script: {script}")
+            return self._上下文.用户代理
+        raise AssertionError(f"未预期的脚本：{script}")
 
 
-class FakeContext:
+class 假上下文:
     def __init__(
         self,
         *,
-        polls_before_cookie: int,
-        user_agent: str = UA,
-        expires_in: float = 1200.0,
-        raise_on_goto: Exception | None = None,
+        出饼干前轮询次数: int,
+        用户代理: str = 用户代理文本,
+        剩余秒数: float = 1200.0,
+        跳转时抛错: Exception | None = None,
     ) -> None:
-        self.polls_before_cookie = polls_before_cookie
-        self.user_agent = user_agent
-        self.expires_in = expires_in
-        self.raise_on_goto = raise_on_goto
-        self.polls = 0
-        self.closed = False
-        self.goto_calls: list[tuple[str, str | None, int | None]] = []
+        self.出饼干前轮询次数 = 出饼干前轮询次数
+        self.用户代理 = 用户代理
+        self.剩余秒数 = 剩余秒数
+        self.跳转时抛错 = 跳转时抛错
+        self.轮询次数 = 0
+        self.已关闭 = False
+        self.跳转调用: list[tuple[str, str | None, int | None]] = []
 
-    def new_page(self) -> FakePage:
-        return FakePage(self)
+    def new_page(self) -> 假页面:
+        return 假页面(self)
 
     def cookies(self) -> list[dict[str, object]]:
-        if self.raise_on_goto is not None:
+        if self.跳转时抛错 is not None:
             return []
-        if self.polls < self.polls_before_cookie:
+        if self.轮询次数 < self.出饼干前轮询次数:
             return []
         return [
             {
                 "name": "cf_clearance",
                 "value": "fake-clearance",
-                "expires": time.time() + self.expires_in,
+                "expires": time.time() + self.剩余秒数,
             }
         ]
 
     def close(self) -> None:
-        self.closed = True
+        self.已关闭 = True
 
 
-class FakeBrowser:
-    def __init__(self, context: FakeContext) -> None:
-        self.context = context
-        self.closed = False
+class 假浏览器:
+    def __init__(self, 上下文: 假上下文) -> None:
+        self.上下文 = 上下文
+        self.已关闭 = False
 
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *exc_info: object) -> None:
-        self.closed = True
+    def __exit__(self, *异常信息: object) -> None:
+        self.已关闭 = True
 
-    def new_context(self) -> FakeContext:
-        return self.context
+    def new_context(self) -> 假上下文:
+        return self.上下文
 
 
-def make_backend(
-    context: FakeContext, *, challenge_timeout: float = 5.0, poll_interval: float = 0.001
-) -> tuple[CamoufoxBackend, FakeBrowser]:
-    browser = FakeBrowser(context)
-    backend = CamoufoxBackend(
-        challenge_timeout=challenge_timeout,
-        poll_interval=poll_interval,
-        browser_factory=lambda: browser,
+def 造后端(
+    上下文: 假上下文, *, 挑战超时: float = 5.0, 轮询间隔: float = 0.001
+) -> tuple[Camoufox后端, 假浏览器]:
+    浏览器 = 假浏览器(上下文)
+    后端对象 = Camoufox后端(
+        挑战超时=挑战超时,
+        轮询间隔=轮询间隔,
+        工厂=lambda: 浏览器,
     )
-    return backend, browser
+    return 后端对象, 浏览器
 
 
-def test_solve_collects_cookie_and_user_agent():
-    context = FakeContext(polls_before_cookie=2)
-    backend, browser = make_backend(context)
+def test_求解收集饼干与用户代理():
+    上下文 = 假上下文(出饼干前轮询次数=2)
+    后端对象, 浏览器 = 造后端(上下文)
 
-    result = backend.solve("https://target.example/path?q=1", timeout=5.0)
+    结果 = 后端对象.求解("https://target.example/path?q=1", 超时=5.0)
 
-    assert result.clearance == "fake-clearance"
-    assert result.user_agent == UA
-    assert result.domain == "target.example"
-    assert 1190 <= result.expires_in <= 1200
-    assert result.solve_seconds >= 0.0
-    assert context.polls == 2
-    assert context.closed is True
-    assert browser.closed is True
-    assert context.goto_calls[0][0] == "https://target.example/path?q=1"
-    assert context.goto_calls[0][1] == "domcontentloaded"
-
-
-def test_solve_times_out_without_cookie():
-    context = FakeContext(polls_before_cookie=10**9)
-    backend, browser = make_backend(context, challenge_timeout=0.05, poll_interval=0.005)
-
-    with pytest.raises(SolveTimeout):
-        backend.solve("https://target.example", timeout=5.0)
-
-    assert context.closed is True
-    assert browser.closed is True
+    assert 结果.凭据 == "fake-clearance"
+    assert 结果.用户代理 == 用户代理文本
+    assert 结果.域名 == "target.example"
+    assert 1190 <= 结果.剩余秒数 <= 1200
+    assert 结果.耗时秒 >= 0.0
+    assert 上下文.轮询次数 == 2
+    assert 上下文.已关闭 is True
+    assert 浏览器.已关闭 is True
+    assert 上下文.跳转调用[0][0] == "https://target.example/path?q=1"
+    assert 上下文.跳转调用[0][1] == "domcontentloaded"
 
 
-def test_goto_failure_is_reported_as_solve_failed():
-    context = FakeContext(polls_before_cookie=0, raise_on_goto=RuntimeError("net::ERR_FAILED"))
-    backend, _ = make_backend(context)
+def test_无饼干时求解超时():
+    上下文 = 假上下文(出饼干前轮询次数=10**9)
+    后端对象, 浏览器 = 造后端(上下文, 挑战超时=0.05, 轮询间隔=0.005)
 
-    with pytest.raises(SolveFailed, match="net::ERR_FAILED"):
-        backend.solve("https://target.example", timeout=5.0)
+    with pytest.raises(求解超时):
+        后端对象.求解("https://target.example", 超时=5.0)
 
-    assert context.closed is True
+    assert 上下文.已关闭 is True
+    assert 浏览器.已关闭 is True
 
 
-def test_browser_launch_failure_is_reported_as_solve_failed():
-    def exploding_factory():
+def test_跳转失败报告为求解失败():
+    上下文 = 假上下文(
+        出饼干前轮询次数=0, 跳转时抛错=RuntimeError("net::ERR_FAILED")
+    )
+    后端对象, _ = 造后端(上下文)
+
+    with pytest.raises(求解失败, match="net::ERR_FAILED"):
+        后端对象.求解("https://target.example", 超时=5.0)
+
+    assert 上下文.已关闭 is True
+
+
+def test_浏览器启动失败报告为求解失败():
+    def 爆炸工厂():
         raise RuntimeError("firefox binary missing")
 
-    backend = CamoufoxBackend(browser_factory=exploding_factory)
-    with pytest.raises(SolveFailed, match="firefox binary missing"):
-        backend.solve("https://target.example", timeout=5.0)
+    后端对象 = Camoufox后端(工厂=爆炸工厂)
+    with pytest.raises(求解失败, match="firefox binary missing"):
+        后端对象.求解("https://target.example", 超时=5.0)
 
 
-def test_missing_user_agent_blocks_the_credential():
-    context = FakeContext(polls_before_cookie=0, user_agent="")
-    backend, _ = make_backend(context, challenge_timeout=0.02, poll_interval=0.005)
+def test_缺失用户代理时拒绝发凭据():
+    上下文 = 假上下文(出饼干前轮询次数=0, 用户代理="")
+    后端对象, _ = 造后端(上下文, 挑战超时=0.02, 轮询间隔=0.005)
 
-    with pytest.raises(SolveTimeout):
-        backend.solve("https://target.example", timeout=5.0)
-
-
-def test_domain_of_normalizes_host():
-    assert domain_of("https://Target.Example:8443/a") == "target.example"
-    assert domain_of("http://sub.target.example/") == "sub.target.example"
-    assert domain_of("not a url") == ""
+    with pytest.raises(求解超时):
+        后端对象.求解("https://target.example", 超时=5.0)
 
 
-def test_backend_protocol_is_satisfied():
-    backend, _ = make_backend(FakeContext(polls_before_cookie=0))
-    assert isinstance(backend, Backend)
-    assert backend.name == "camoufox"
+def test_提取域名规范化主机():
+    assert 提取域名("https://Target.Example:8443/a") == "target.example"
+    assert 提取域名("http://sub.target.example/") == "sub.target.example"
+    assert 提取域名("not a url") == ""
+
+
+def test_后端协议被满足():
+    后端对象, _ = 造后端(假上下文(出饼干前轮询次数=0))
+    assert isinstance(后端对象, 后端)
+    assert 后端对象.名称 == "camoufox"

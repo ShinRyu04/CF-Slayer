@@ -1,4 +1,4 @@
-"""Runtime configuration and first-run bearer token generation."""
+"""运行时配置，以及首次启动时的 Bearer 令牌生成。"""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-log = logging.getLogger(__name__)
+日志 = logging.getLogger(__name__)
 
-TOKEN_ENV_VAR = "CF_SLAYER_AUTH_TOKEN"
-DEFAULT_ENV_FILE = Path(".env")
+令牌环境变量 = "CF_SLAYER_AUTH_TOKEN"
+默认配置文件 = Path(".env")
 
 
-class Settings(BaseSettings):
-    """All fields map to ``CF_SLAYER_<FIELD>`` environment variables / .env keys."""
+class 配置(BaseSettings):
+    """所有字段映射到 ``CF_SLAYER_<FIELD>`` 环境变量 / .env 键。"""
 
     model_config = SettingsConfigDict(env_prefix="CF_SLAYER_", env_file=".env", extra="ignore")
 
@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     headless: bool = True
     auth_token: str = ""
 
-    # v2: ordered backend chain, prewarm.
+    # v2：有序后端链与预热。
     backends: str = "camoufox,pydoll"
     chrome_path: str = ""
     prewarm_domains: str = ""
@@ -40,48 +40,48 @@ class Settings(BaseSettings):
     prewarm_interval: float = 60.0
 
     @property
-    def backend_names(self) -> list[str]:
-        return [part.strip().lower() for part in self.backends.split(",") if part.strip()]
+    def 后端名称列表(self) -> list[str]:
+        return [片段.strip().lower() for 片段 in self.backends.split(",") if 片段.strip()]
 
     @property
-    def prewarm_targets(self) -> list[str]:
-        return [part.strip() for part in self.prewarm_domains.split(",") if part.strip()]
+    def 预热目标列表(self) -> list[str]:
+        return [片段.strip() for 片段 in self.prewarm_domains.split(",") if 片段.strip()]
 
 
-def ensure_token(env_file: Path = DEFAULT_ENV_FILE, settings: Settings | None = None) -> str:
-    """Return the bearer token, generating one into ``.env`` on first run.
+def 确保令牌(环境文件: Path = 默认配置文件, 配置对象: 配置 | None = None) -> str:
+    """返回 Bearer 令牌；首次运行时生成一个并写入 ``.env``。
 
-    Order: process environment > ``.env`` > generated.
+    优先级：进程环境变量 > ``.env`` > 新生成。
     """
-    env_token = os.environ.get(TOKEN_ENV_VAR, "").strip()
-    if env_token:
-        return env_token
-    if settings is not None and settings.auth_token.strip():
-        return settings.auth_token.strip()
+    环境令牌 = os.environ.get(令牌环境变量, "").strip()
+    if 环境令牌:
+        return 环境令牌
+    if 配置对象 is not None and 配置对象.auth_token.strip():
+        return 配置对象.auth_token.strip()
 
-    token = secrets.token_urlsafe(32)
+    令牌 = secrets.token_urlsafe(32)
     try:
-        existing = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
-        if existing and not existing.endswith("\n"):
-            existing += "\n"
-        env_file.write_text(
-            f"{existing}{TOKEN_ENV_VAR}={token}\n", encoding="utf-8", newline="\n"
+        现有内容 = 环境文件.read_text(encoding="utf-8") if 环境文件.exists() else ""
+        if 现有内容 and not 现有内容.endswith("\n"):
+            现有内容 += "\n"
+        环境文件.write_text(
+            f"{现有内容}{令牌环境变量}={令牌}\n", encoding="utf-8", newline="\n"
         )
-        # POSIX mode is advisory on Windows; the ACL below is what actually matters.
+        # POSIX 权限在 Windows 上只是建议值；真正起作用的是下面的 ACL。
         with suppress(OSError):
-            os.chmod(env_file, 0o600)
-        log.info("generated bearer token and wrote it to %s (chmod 600 requested)", env_file)
-        log.info(
-            "Windows does not enforce POSIX modes; restrict the file with: "
+            os.chmod(环境文件, 0o600)
+        日志.info("已生成 Bearer 令牌并写入 %s（已请求 chmod 600）", 环境文件)
+        日志.info(
+            "Windows 不强制 POSIX 权限；请用以下命令收紧文件权限："
             'icacls .env /inheritance:r /grant:r "%%USERNAME%%:F"'
         )
-    except OSError as exc:  # read-only FS, permission denied, ...
-        log.warning("could not persist generated token to %s: %s", env_file, exc)
-    return token
+    except OSError as 异常:  # 只读文件系统、权限不足……
+        日志.warning("无法把生成的令牌写入 %s：%s", 环境文件, 异常)
+    return 令牌
 
 
-def load_settings(env_file: Path = DEFAULT_ENV_FILE) -> Settings:
-    """Build settings, creating the token file when the token is absent."""
-    settings = Settings(_env_file=env_file)
-    settings.auth_token = ensure_token(env_file, settings)
-    return settings
+def 加载配置(环境文件: Path = 默认配置文件) -> 配置:
+    """构建配置；令牌缺失时创建令牌文件。"""
+    配置对象 = 配置(_env_file=环境文件)
+    配置对象.auth_token = 确保令牌(环境文件, 配置对象)
+    return 配置对象

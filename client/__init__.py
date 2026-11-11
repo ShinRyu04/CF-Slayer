@@ -1,5 +1,5 @@
-"""Replay client package."""
+"""回放客户端包。"""
 
-from .replay import ReplayResult, is_challenge_page, replay
+from .replay import 回放, 回放结果, 是挑战页
 
-__all__ = ["ReplayResult", "is_challenge_page", "replay"]
+__all__ = ["回放", "回放结果", "是挑战页"]

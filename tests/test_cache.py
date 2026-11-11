@@ -7,124 +7,124 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from solver.cache import SQLiteCache
+from solver.cache import SQLite缓存
 
 
-def test_put_get_roundtrip(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db", ttl_seconds=1800)
+def test_写入后读出(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db", 有效秒数=1800)
     try:
-        put = cache.put("example.com", "cookie-value", "UA/1.0", ttl=600)
-        got = cache.get("example.com")
-        assert got is not None
-        assert got.clearance == "cookie-value"
-        assert got.user_agent == "UA/1.0"
-        assert got.created_at == pytest.approx(put.created_at)
-        assert got.expires_at == pytest.approx(put.expires_at)
-        assert got.remaining() <= 600
+        写入结果 = 缓存.写入("example.com", "cookie-value", "UA/1.0", 有效期=600)
+        读出 = 缓存.查询("example.com")
+        assert 读出 is not None
+        assert 读出.凭据 == "cookie-value"
+        assert 读出.用户代理 == "UA/1.0"
+        assert 读出.创建时间 == pytest.approx(写入结果.创建时间)
+        assert 读出.过期时间 == pytest.approx(写入结果.过期时间)
+        assert 读出.剩余() <= 600
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_expired_entry_is_a_miss_and_is_deleted(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db", ttl_seconds=1800)
+def test_过期记录未命中并被删除(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db", 有效秒数=1800)
     try:
-        cache.put("example.com", "v", "ua", ttl=10, now=1000.0)
-        assert cache.get("example.com", now=1009.0) is not None
-        assert cache.get("example.com", now=1010.0) is None
-        assert cache.get("example.com", now=1005.0) is None  # row was deleted
-        assert cache.count(now=1005.0) == 0
+        缓存.写入("example.com", "v", "ua", 有效期=10, 当前时刻=1000.0)
+        assert 缓存.查询("example.com", 当前时刻=1009.0) is not None
+        assert 缓存.查询("example.com", 当前时刻=1010.0) is None
+        assert 缓存.查询("example.com", 当前时刻=1005.0) is None  # 行已被删除
+        assert 缓存.计数(当前时刻=1005.0) == 0
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_ttl_is_clamped_to_cache_maximum(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db", ttl_seconds=1800)
+def test_有效期被压到缓存上限(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db", 有效秒数=1800)
     try:
-        entry = cache.put("example.com", "v", "ua", ttl=99999, now=0.0)
-        assert entry.expires_at == pytest.approx(1800.0)
+        记录 = 缓存.写入("example.com", "v", "ua", 有效期=99999, 当前时刻=0.0)
+        assert 记录.过期时间 == pytest.approx(1800.0)
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_put_overwrites_existing_domain(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db")
+def test_写入覆盖同一域名(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db")
     try:
-        cache.put("example.com", "old", "ua-old")
-        cache.put("example.com", "new", "ua-new")
-        got = cache.get("example.com")
-        assert got is not None
-        assert (got.clearance, got.user_agent) == ("new", "ua-new")
-        assert cache.count() == 1
+        缓存.写入("example.com", "old", "ua-old")
+        缓存.写入("example.com", "new", "ua-new")
+        读出 = 缓存.查询("example.com")
+        assert 读出 is not None
+        assert (读出.凭据, 读出.用户代理) == ("new", "ua-new")
+        assert 缓存.计数() == 1
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_domains_are_isolated(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db")
+def test_域名相互隔离(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db")
     try:
-        cache.put("a.example.com", "a", "ua")
-        cache.put("b.example.com", "b", "ua")
-        assert cache.get("a.example.com").clearance == "a"
-        assert cache.get("b.example.com").clearance == "b"
-        assert cache.get("example.com") is None
+        缓存.写入("a.example.com", "a", "ua")
+        缓存.写入("b.example.com", "b", "ua")
+        assert 缓存.查询("a.example.com").凭据 == "a"
+        assert 缓存.查询("b.example.com").凭据 == "b"
+        assert 缓存.查询("example.com") is None
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_invalidate(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db")
+def test_删除记录(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db")
     try:
-        cache.put("example.com", "v", "ua")
-        assert cache.invalidate("example.com") is True
-        assert cache.invalidate("example.com") is False
-        assert cache.get("example.com") is None
+        缓存.写入("example.com", "v", "ua")
+        assert 缓存.删除("example.com") is True
+        assert 缓存.删除("example.com") is False
+        assert 缓存.查询("example.com") is None
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_purge_expired(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db")
+def test_清理过期记录(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db")
     try:
-        cache.put("old.example.com", "v", "ua", ttl=5, now=100.0)
-        cache.put("new.example.com", "v", "ua", ttl=500, now=100.0)
-        assert cache.purge_expired(now=200.0) == 1
-        assert cache.get("new.example.com", now=200.0) is not None
+        缓存.写入("old.example.com", "v", "ua", 有效期=5, 当前时刻=100.0)
+        缓存.写入("new.example.com", "v", "ua", 有效期=500, 当前时刻=100.0)
+        assert 缓存.清理过期(当前时刻=200.0) == 1
+        assert 缓存.查询("new.example.com", 当前时刻=200.0) is not None
     finally:
-        cache.close()
+        缓存.关闭()
 
 
-def test_wal_mode_is_enabled(tmp_path):
-    path = tmp_path / "c.db"
-    cache = SQLiteCache(path)
-    cache.close()
-    conn = sqlite3.connect(path)
+def test_启用WAL模式(tmp_path):
+    路径 = tmp_path / "c.db"
+    缓存 = SQLite缓存(路径)
+    缓存.关闭()
+    连接 = sqlite3.connect(路径)
     try:
-        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert 连接.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     finally:
-        conn.close()
+        连接.close()
 
 
-def test_concurrent_reads_and_writes(tmp_path):
-    cache = SQLiteCache(tmp_path / "c.db")
-    barrier = threading.Barrier(8)
-    errors: list[BaseException] = []
+def test_并发读写(tmp_path):
+    缓存 = SQLite缓存(tmp_path / "c.db")
+    栅栏 = threading.Barrier(8)
+    错误列表: list[BaseException] = []
 
-    def worker(index: int) -> None:
+    def 工作线程(序号: int) -> None:
         try:
-            barrier.wait(timeout=5)
-            for round_no in range(25):
-                domain = f"host{index}.example.com"
-                cache.put(domain, f"v{round_no}", f"ua{index}")
-                got = cache.get(domain)
-                assert got is not None
-            assert cache.get(f"host{index}.example.com") is not None
-        except BaseException as exc:
-            errors.append(exc)
+            栅栏.wait(timeout=5)
+            for 轮次 in range(25):
+                域名 = f"host{序号}.example.com"
+                缓存.写入(域名, f"v{轮次}", f"ua{序号}")
+                读出 = 缓存.查询(域名)
+                assert 读出 is not None
+            assert 缓存.查询(f"host{序号}.example.com") is not None
+        except BaseException as 异常:
+            错误列表.append(异常)
 
     try:
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            list(pool.map(worker, range(8)))
-        assert errors == []
-        assert cache.count(now=time.time() + 1) == 8
+        with ThreadPoolExecutor(max_workers=8) as 线程池:
+            list(线程池.map(工作线程, range(8)))
+        assert 错误列表 == []
+        assert 缓存.计数(当前时刻=time.time() + 1) == 8
     finally:
-        cache.close()
+        缓存.关闭()

@@ -1,4 +1,4 @@
-"""Shared fixtures. No network, no real browser."""
+"""共享夹具。无网络、无真实浏览器。"""
 
 from __future__ import annotations
 
@@ -7,58 +7,58 @@ import os
 import pytest
 from fastapi.testclient import TestClient
 
-from solver.config import Settings
-from solver.engine import ClearanceResult, domain_of
-from solver.main import create_app
+from solver.config import 配置
+from solver.engine import 提取域名, 放行结果
+from solver.main import 创建应用
 
 os.environ.setdefault("CF_SLAYER_AUTH_TOKEN", "test-token")
 
-TOKEN = "test-token"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
+令牌 = "test-token"
+鉴权头 = {"Authorization": f"Bearer {令牌}"}
 
 
-class FakeBackend:
-    """Stands in for CamoufoxBackend; records calls and can fail on demand."""
+class 假后端实现:
+    """替代 Camoufox后端；记录调用，也可按需失败。"""
 
-    name = "camoufox"
+    名称 = "camoufox"
 
     def __init__(
         self,
-        clearance: str = "clearance-token-value",
-        user_agent: str = (
+        凭据: str = "clearance-token-value",
+        用户代理: str = (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) "
             "Gecko/20100101 Firefox/156.0"
         ),
-        expires_in: int = 1700,
-        solve_seconds: float = 1.25,
+        剩余秒数: int = 1700,
+        耗时秒: float = 1.25,
     ) -> None:
-        self.clearance = clearance
-        self.user_agent = user_agent
-        self.expires_in = expires_in
-        self.solve_seconds = solve_seconds
-        self.calls = 0
-        self.urls: list[str] = []
-        self.error: Exception | None = None
+        self.凭据 = 凭据
+        self.用户代理 = 用户代理
+        self.剩余秒数 = 剩余秒数
+        self.耗时秒 = 耗时秒
+        self.调用次数 = 0
+        self.网址列表: list[str] = []
+        self.错误: Exception | None = None
 
-    def solve(self, url: str, timeout: float = 120.0) -> ClearanceResult:
-        self.calls += 1
-        self.urls.append(url)
-        if self.error is not None:
-            raise self.error
-        return ClearanceResult(
-            clearance=self.clearance,
-            user_agent=self.user_agent,
-            domain=domain_of(url),
-            expires_in=self.expires_in,
-            solve_seconds=self.solve_seconds,
+    def 求解(self, 网址: str, 超时: float = 120.0) -> 放行结果:
+        self.调用次数 += 1
+        self.网址列表.append(网址)
+        if self.错误 is not None:
+            raise self.错误
+        return 放行结果(
+            凭据=self.凭据,
+            用户代理=self.用户代理,
+            域名=提取域名(网址),
+            剩余秒数=self.剩余秒数,
+            耗时秒=self.耗时秒,
         )
 
 
 @pytest.fixture
-def settings(tmp_path) -> Settings:
-    return Settings(
+def 配置对象(tmp_path) -> 配置:
+    return 配置(
         _env_file=None,
-        auth_token=TOKEN,
+        auth_token=令牌,
         cache_path=str(tmp_path / "cache.sqlite3"),
         ttl_seconds=1800,
         solve_timeout=5.0,
@@ -70,23 +70,23 @@ def settings(tmp_path) -> Settings:
 
 
 @pytest.fixture
-def api(settings: Settings):
-    backend = FakeBackend()
-    app = create_app(settings=settings, backend=backend)
-    with TestClient(app) as client:
-        yield client, backend, app.state.service
+def 接口(配置对象: 配置):
+    后端对象 = 假后端实现()
+    应用 = 创建应用(配置对象=配置对象, 后端对象=后端对象)
+    with TestClient(应用) as 客户端:
+        yield 客户端, 后端对象, 应用.state.服务
 
 
 @pytest.fixture
-def client(api) -> TestClient:
-    return api[0]
+def 客户端(接口) -> TestClient:
+    return 接口[0]
 
 
 @pytest.fixture
-def backend(api) -> FakeBackend:
-    return api[1]
+def 假后端(接口) -> 假后端实现:
+    return 接口[1]
 
 
 @pytest.fixture
-def service(api):
-    return api[2]
+def 服务实例(接口):
+    return 接口[2]

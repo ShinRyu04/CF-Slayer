@@ -4,80 +4,80 @@ from pathlib import Path
 
 import pytest
 
-import solver.pydoll_backend as pydoll_backend
-from solver.chain import BackendChain, ChainSolveFailed
-from solver.errors import SolveFailed
+import solver.pydoll_backend as pydoll模块
+from solver.chain import 后端链, 链求解失败
+from solver.errors import 求解失败
 from solver.pydoll_backend import (
-    PydollBackend,
-    chrome_major_version,
-    chrome_user_agent,
-    find_chrome,
+    Chrome主版本,
+    Chrome用户代理,
+    Pydoll后端,
+    查找Chrome,
 )
 
 
-def test_explicit_chrome_path_wins(tmp_path):
-    chrome = tmp_path / "chrome.exe"
-    chrome.write_bytes(b"")
-    assert find_chrome(str(chrome)) == str(chrome)
+def test_显式Chrome路径优先(tmp_path):
+    Chrome路径 = tmp_path / "chrome.exe"
+    Chrome路径.write_bytes(b"")
+    assert 查找Chrome(str(Chrome路径)) == str(Chrome路径)
 
 
-def test_missing_explicit_chrome_path_does_not_fall_back(tmp_path):
-    assert find_chrome(str(tmp_path / "missing.exe")) is None
+def test_显式路径缺失时不回退(tmp_path):
+    assert 查找Chrome(str(tmp_path / "missing.exe")) is None
 
 
-def test_version_is_read_from_the_application_folder(tmp_path):
-    chrome = tmp_path / "Application" / "157.0.6099.62" / "chrome.exe"
-    chrome.parent.mkdir(parents=True)
-    chrome.write_bytes(b"")
-    assert chrome_major_version(str(chrome)) == "157"
-    ua = chrome_user_agent(str(chrome))
-    assert ua is not None
-    assert "Chrome/157.0.0.0" in ua
-    assert "Headless" not in ua
+def test_版本从Application目录读取(tmp_path):
+    Chrome路径 = tmp_path / "Application" / "157.0.6099.62" / "chrome.exe"
+    Chrome路径.parent.mkdir(parents=True)
+    Chrome路径.write_bytes(b"")
+    assert Chrome主版本(str(Chrome路径)) == "157"
+    用户代理 = Chrome用户代理(str(Chrome路径))
+    assert 用户代理 is not None
+    assert "Chrome/157.0.0.0" in 用户代理
+    assert "Headless" not in 用户代理
 
 
-def test_version_missing_returns_none(tmp_path):
-    chrome = tmp_path / "chrome.exe"
-    chrome.write_bytes(b"")
-    assert chrome_major_version(str(chrome)) is None
-    assert chrome_user_agent(str(chrome)) is None
+def test_版本缺失时返回None(tmp_path):
+    Chrome路径 = tmp_path / "chrome.exe"
+    Chrome路径.write_bytes(b"")
+    assert Chrome主版本(str(Chrome路径)) is None
+    assert Chrome用户代理(str(Chrome路径)) is None
 
 
-def test_available_reports_missing_chrome(tmp_path):
-    backend = PydollBackend(chrome_path=str(tmp_path / "nope.exe"))
-    ok, reason = backend.available()
-    assert ok is False
-    assert "CF_SLAYER_CHROME_PATH" in reason
+def test_可用性报告缺少Chrome(tmp_path):
+    后端对象 = Pydoll后端(Chrome路径=str(tmp_path / "nope.exe"))
+    可用, 原因 = 后端对象.可用()
+    assert 可用 is False
+    assert "CF_SLAYER_CHROME_PATH" in 原因
 
 
-def test_available_reports_missing_package(monkeypatch, tmp_path):
-    chrome = tmp_path / "chrome.exe"
-    chrome.write_bytes(b"")
-    monkeypatch.setattr(pydoll_backend.importlib.util, "find_spec", lambda name: None)
-    backend = PydollBackend(chrome_path=str(chrome))
-    ok, reason = backend.available()
-    assert ok is False
-    assert "pydoll not installed" in reason
+def test_可用性报告缺少依赖包(monkeypatch, tmp_path):
+    Chrome路径 = tmp_path / "chrome.exe"
+    Chrome路径.write_bytes(b"")
+    monkeypatch.setattr(pydoll模块.importlib.util, "find_spec", lambda name: None)
+    后端对象 = Pydoll后端(Chrome路径=str(Chrome路径))
+    可用, 原因 = 后端对象.可用()
+    assert 可用 is False
+    assert "未安装 pydoll" in 原因
 
 
-def test_solve_without_chrome_raises_solve_failed(tmp_path):
-    backend = PydollBackend(chrome_path=str(tmp_path / "nope.exe"))
-    with pytest.raises(SolveFailed, match="Chrome"):
-        backend.solve("https://target.example/", timeout=5.0)
+def test_无Chrome时求解抛出求解失败(tmp_path):
+    后端对象 = Pydoll后端(Chrome路径=str(tmp_path / "nope.exe"))
+    with pytest.raises(求解失败, match="Chrome"):
+        后端对象.求解("https://target.example/", 超时=5.0)
 
 
-def test_chain_skips_pydoll_without_chrome():
-    pydoll = PydollBackend(chrome_path="C:/definitely/missing/chrome.exe")
-    chain = BackendChain([pydoll])
-    with pytest.raises(ChainSolveFailed) as info:
-        chain.solve("https://target.example/", timeout=1.0)
-    assert info.value.attempts[0].backend == "pydoll"
-    assert "Chrome not found" in str(info.value.attempts[0].error)
+def test_链路跳过无Chrome的pydoll():
+    pydoll后端 = Pydoll后端(Chrome路径="C:/definitely/missing/chrome.exe")
+    链路 = 后端链([pydoll后端])
+    with pytest.raises(链求解失败) as 信息:
+        链路.求解("https://target.example/", 超时=1.0)
+    assert 信息.value.尝试记录[0].后端名 == "pydoll"
+    assert "找到 Chrome" in str(信息.value.尝试记录[0].错误)
 
 
-def test_chrome_executable_is_detected_on_this_windows_machine():
-    # Windows acceptance check: a real Chrome install must be found.
-    path = find_chrome()
-    if path is None:
-        pytest.skip("no Chrome on this machine")
-    assert Path(path).is_file()
+def test_本机Windows可探测到Chrome():
+    # Windows 验收检查：真实安装的 Chrome 必须能被找到。
+    路径 = 查找Chrome()
+    if 路径 is None:
+        pytest.skip("本机未安装 Chrome")
+    assert Path(路径).is_file()

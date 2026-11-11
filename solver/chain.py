@@ -1,8 +1,7 @@
-"""Ordered backend fallback chain.
+"""有序后端回退链。
 
-The chain implements the same ``Backend`` protocol as a single backend, so the
-service does not care how many solvers stand behind it. Every try is recorded in
-``ClearanceResult.attempts`` (or on the raised error) for observability.
+链路实现了与单个后端相同的 ``后端`` 协议，因此服务层不关心背后有几个求解器。
+每次尝试都会记录进 ``放行结果.尝试记录``（或随异常抛出），便于观测。
 """
 
 from __future__ import annotations
@@ -12,98 +11,105 @@ import time
 from collections.abc import Sequence
 from dataclasses import replace
 
-from .engine import Attempt, Backend, ClearanceResult
-from .errors import SolveFailed, SolveTimeout
+from .engine import 单次尝试, 后端, 放行结果
+from .errors import 求解失败, 求解超时
 
-log = logging.getLogger(__name__)
-
-
-class ChainSolveFailed(SolveFailed):
-    """All backends failed; ``attempts`` describes each try."""
-
-    def __init__(self, message: str, attempts: Sequence[Attempt]) -> None:
-        super().__init__(message)
-        self.attempts = tuple(attempts)
+日志 = logging.getLogger(__name__)
 
 
-class ChainSolveTimeout(SolveTimeout):
-    """All backends timed out; ``attempts`` describes each try."""
+class 链求解失败(求解失败):
+    """所有后端都失败；``尝试记录`` 描述每一次尝试。"""
 
-    def __init__(self, message: str, attempts: Sequence[Attempt]) -> None:
-        super().__init__(message)
-        self.attempts = tuple(attempts)
+    def __init__(self, 消息: str, 尝试记录: Sequence[单次尝试]) -> None:
+        super().__init__(消息)
+        self.尝试记录 = tuple(尝试记录)
 
 
-class BackendChain:
-    """Try backends in order, return the first clearance.
+class 链求解超时(求解超时):
+    """所有后端都超时；``尝试记录`` 描述每一次尝试。"""
 
-    A backend that declares itself unavailable (``available()`` returning
-    ``(False, reason)``) is skipped without being called, so a machine without
-    Chrome still runs the Camoufox path instead of crashing.
+    def __init__(self, 消息: str, 尝试记录: Sequence[单次尝试]) -> None:
+        super().__init__(消息)
+        self.尝试记录 = tuple(尝试记录)
+
+
+class 后端链:
+    """按顺序尝试后端，返回第一个成功的放行凭据。
+
+    声明自身不可用的后端（``可用()`` 返回 ``(False, 原因)``）会被直接跳过，
+    因此没装 Chrome 的机器仍会走 Camoufox，而不是直接崩溃。
     """
 
-    def __init__(self, backends: Sequence[Backend]) -> None:
-        if not backends:
-            raise ValueError("BackendChain needs at least one backend")
-        self._backends = tuple(backends)
-        self.name = self._backends[0].name
+    def __init__(self, 后端列表: Sequence[后端]) -> None:
+        if not 后端列表:
+            raise ValueError("后端链至少需要一个后端")
+        self._后端列表 = tuple(后端列表)
+        self.名称 = self._后端列表[0].名称
 
     @property
-    def backends(self) -> tuple[Backend, ...]:
-        return self._backends
+    def 后端列表(self) -> tuple[后端, ...]:
+        return self._后端列表
 
-    def solve(self, url: str, timeout: float = 120.0) -> ClearanceResult:
-        attempts: list[Attempt] = []
-        timeouts = 0
+    def 求解(self, 网址: str, 超时: float = 120.0) -> 放行结果:
+        尝试记录: list[单次尝试] = []
+        超时次数 = 0
 
-        for backend in self._backends:
-            unavailable = _unavailable_reason(backend)
-            if unavailable is not None:
-                attempts.append(Attempt(backend.name, False, unavailable, 0.0))
-                log.warning("backend %s skipped: %s", backend.name, unavailable)
+        for 后端对象 in self._后端列表:
+            不可用原因 = _探测不可用原因(后端对象)
+            if 不可用原因 is not None:
+                尝试记录.append(单次尝试(后端对象.名称, False, 不可用原因, 0.0))
+                日志.warning("后端 %s 被跳过：%s", 后端对象.名称, 不可用原因)
                 continue
 
-            started = time.monotonic()
+            开始时刻 = time.monotonic()
             try:
-                result = backend.solve(url, timeout)
-            except SolveTimeout as exc:
-                timeouts += 1
-                attempts.append(Attempt(backend.name, False, str(exc), time.monotonic() - started))
-                log.warning("backend %s timed out in %.1fs", backend.name, attempts[-1].seconds)
+                结果 = 后端对象.求解(网址, 超时)
+            except 求解超时 as 异常:
+                超时次数 += 1
+                尝试记录.append(
+                    单次尝试(后端对象.名称, False, str(异常), time.monotonic() - 开始时刻)
+                )
+                日志.warning(
+                    "后端 %s 超时，用时 %.1f 秒", 后端对象.名称, 尝试记录[-1].秒数
+                )
                 continue
-            except SolveFailed as exc:
-                attempts.append(Attempt(backend.name, False, str(exc), time.monotonic() - started))
-                log.warning("backend %s failed: %s", backend.name, exc)
+            except 求解失败 as 异常:
+                尝试记录.append(
+                    单次尝试(后端对象.名称, False, str(异常), time.monotonic() - 开始时刻)
+                )
+                日志.warning("后端 %s 失败：%s", 后端对象.名称, 异常)
                 continue
-            except Exception as exc:  # one broken backend must not kill the chain
-                attempts.append(
-                    Attempt(
-                        backend.name,
+            except Exception as 异常:  # 单个后端损坏不能拖垮整条链
+                尝试记录.append(
+                    单次尝试(
+                        后端对象.名称,
                         False,
-                        f"{type(exc).__name__}: {exc}",
-                        time.monotonic() - started,
+                        f"{type(异常).__name__}: {异常}",
+                        time.monotonic() - 开始时刻,
                     )
                 )
-                log.exception("backend %s raised unexpectedly", backend.name)
+                日志.exception("后端 %s 抛出未预期异常", 后端对象.名称)
                 continue
 
-            attempts.append(Attempt(backend.name, True, None, time.monotonic() - started))
-            log.info("backend %s solved %s", backend.name, url)
-            return replace(result, attempts=tuple(attempts))
+            尝试记录.append(
+                单次尝试(后端对象.名称, True, None, time.monotonic() - 开始时刻)
+            )
+            日志.info("后端 %s 求解成功：%s", 后端对象.名称, 网址)
+            return replace(结果, 尝试记录=tuple(尝试记录))
 
-        summary = "; ".join(f"{a.backend}: {a.error}" for a in attempts) or "no backends ran"
-        message = f"all backends failed ({len(attempts)} attempt(s)): {summary}"
-        if attempts and timeouts == len(attempts):
-            raise ChainSolveTimeout(message, attempts)
-        raise ChainSolveFailed(message, attempts)
+        摘要 = "；".join(f"{条目.后端名}: {条目.错误}" for 条目 in 尝试记录) or "没有后端执行"
+        消息 = f"所有后端均失败（共 {len(尝试记录)} 次尝试）：{摘要}"
+        if 尝试记录 and 超时次数 == len(尝试记录):
+            raise 链求解超时(消息, 尝试记录)
+        raise 链求解失败(消息, 尝试记录)
 
 
-def _unavailable_reason(backend: Backend) -> str | None:
-    probe = getattr(backend, "available", None)
-    if not callable(probe):
+def _探测不可用原因(后端对象: 后端) -> str | None:
+    探测 = getattr(后端对象, "可用", None)
+    if not callable(探测):
         return None
     try:
-        ok, reason = probe()
-    except Exception as exc:  # availability probing must never break dispatch
-        return f"availability check failed: {type(exc).__name__}: {exc}"
-    return None if ok else str(reason or "unavailable")
+        可用, 原因 = 探测()
+    except Exception as 异常:  # 可用性探测绝不能中断调度
+        return f"可用性检查失败：{type(异常).__name__}: {异常}"
+    return None if 可用 else str(原因 or "不可用")

@@ -1,15 +1,15 @@
-"""Error contract shared by the HTTP layer, engine and replay client."""
+"""HTTP 层、引擎与回放客户端共用的错误契约。"""
 
 from __future__ import annotations
 
-#: Error codes exposed in the JSON body: {"error": {"code": ..., "message": ...}}
+#: JSON 响应体中暴露的错误码：{"error": {"code": ..., "message": ...}}
 SOLVE_TIMEOUT = "SOLVE_TIMEOUT"
 SOLVE_FAILED = "SOLVE_FAILED"
 UPSTREAM_403 = "UPSTREAM_403"
 AUTH_MISSING = "AUTH_MISSING"
 BAD_REQUEST = "BAD_REQUEST"
 
-STATUS_BY_CODE = {
+状态码映射 = {
     SOLVE_TIMEOUT: 504,
     SOLVE_FAILED: 502,
     UPSTREAM_403: 502,
@@ -18,35 +18,35 @@ STATUS_BY_CODE = {
 }
 
 
-class ApiError(Exception):
-    """An error that maps directly onto an HTTP response."""
+class 接口错误(Exception):
+    """可直接映射为 HTTP 响应的错误。"""
 
     def __init__(
         self,
-        code: str,
-        message: str,
-        status_code: int | None = None,
-        extra: dict[str, object] | None = None,
+        代码: str,
+        消息: str,
+        状态码: int | None = None,
+        附加信息: dict[str, object] | None = None,
     ) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.status_code = status_code if status_code is not None else STATUS_BY_CODE.get(code, 500)
-        self.extra = extra or {}
+        super().__init__(消息)
+        self.代码 = 代码
+        self.消息 = 消息
+        self.状态码 = 状态码 if 状态码 is not None else 状态码映射.get(代码, 500)
+        self.附加信息 = 附加信息 or {}
 
-    def payload(self) -> dict[str, dict[str, object]]:
-        body: dict[str, object] = {"code": self.code, "message": self.message}
-        body.update(self.extra)
-        return {"error": body}
-
-
-class SolveError(Exception):
-    """Backend failure. The HTTP layer translates it into an API error code."""
+    def 响应体(self) -> dict[str, dict[str, object]]:
+        正文: dict[str, object] = {"code": self.代码, "message": self.消息}
+        正文.update(self.附加信息)
+        return {"error": 正文}
 
 
-class SolveTimeout(SolveError):
-    """The backend ran out of time before producing a clearance."""
+class 求解错误(Exception):
+    """后端失败。HTTP 层会把它翻译成 API 错误码。"""
 
 
-class SolveFailed(SolveError):
-    """The backend ran but did not produce a clearance."""
+class 求解超时(求解错误):
+    """后端在产出凭据前耗尽了时间。"""
+
+
+class 求解失败(求解错误):
+    """后端运行了，但没有产出凭据。"""

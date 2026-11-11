@@ -3,198 +3,198 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from solver.chain import BackendChain, ChainSolveFailed, ChainSolveTimeout
-from solver.config import Settings
-from solver.engine import Attempt, Backend, ClearanceResult
-from solver.errors import SolveFailed, SolveTimeout
-from solver.main import create_app
+from solver.chain import 后端链, 链求解失败, 链求解超时
+from solver.config import 配置
+from solver.engine import 单次尝试, 后端, 放行结果
+from solver.errors import 求解失败, 求解超时
+from solver.main import 创建应用
 
-TOKEN = "chain-test-token"
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
-URL = "https://target.example/"
+令牌 = "chain-test-token"
+鉴权头 = {"Authorization": f"Bearer {令牌}"}
+目标网址 = "https://target.example/"
 
 
-def make_result(clearance: str = "value") -> ClearanceResult:
-    return ClearanceResult(
-        clearance=clearance,
-        user_agent="Mozilla/5.0 test",
-        domain="target.example",
-        expires_in=1700,
-        solve_seconds=1.0,
+def 造结果(凭据值: str = "value") -> 放行结果:
+    return 放行结果(
+        凭据=凭据值,
+        用户代理="Mozilla/5.0 test",
+        域名="target.example",
+        剩余秒数=1700,
+        耗时秒=1.0,
     )
 
 
-class StubBackend:
+class 桩后端:
     def __init__(
         self,
-        name: str,
+        名称: str,
         *,
-        result: ClearanceResult | None = None,
-        error: Exception | None = None,
-        available: tuple[bool, str] | None = None,
-        available_error: Exception | None = None,
+        结果: 放行结果 | None = None,
+        错误: Exception | None = None,
+        可用状态: tuple[bool, str] | None = None,
+        探测错误: Exception | None = None,
     ) -> None:
-        self.name = name
-        self._result = result or make_result()
-        self._error = error
-        self._available = available
-        self._available_error = available_error
-        self.calls = 0
-        self.timeouts: list[float] = []
+        self.名称 = 名称
+        self._结果 = 结果 or 造结果()
+        self._错误 = 错误
+        self._可用状态 = 可用状态
+        self._探测错误 = 探测错误
+        self.调用次数 = 0
+        self.超时参数: list[float] = []
 
-    def available(self) -> tuple[bool, str]:
-        if self._available_error is not None:
-            raise self._available_error
-        return self._available if self._available is not None else (True, "")
+    def 可用(self) -> tuple[bool, str]:
+        if self._探测错误 is not None:
+            raise self._探测错误
+        return self._可用状态 if self._可用状态 is not None else (True, "")
 
-    def solve(self, url: str, timeout: float = 120.0) -> ClearanceResult:
-        self.calls += 1
-        self.timeouts.append(timeout)
-        if self._error is not None:
-            raise self._error
-        return self._result
-
-
-def test_first_success_short_circuits():
-    first = StubBackend("camoufox")
-    second = StubBackend("pydoll")
-    chain = BackendChain([first, second])
-
-    result = chain.solve(URL, timeout=42.0)
-
-    assert result.clearance == first._result.clearance
-    assert [a.backend for a in result.attempts] == ["camoufox"]
-    assert result.attempts[0].ok is True
-    assert result.attempts[0].error is None
-    assert first.calls == 1
-    assert second.calls == 0
-    assert first.timeouts == [42.0]
+    def 求解(self, 网址: str, 超时: float = 120.0) -> 放行结果:
+        self.调用次数 += 1
+        self.超时参数.append(超时)
+        if self._错误 is not None:
+            raise self._错误
+        return self._结果
 
 
-def test_order_is_honored_and_failure_falls_through():
-    first = StubBackend("camoufox", error=SolveFailed("blocked"))
-    second = StubBackend("pydoll", result=make_result("pydoll-value"))
-    chain = BackendChain([first, second])
+def test_首次成功即短路():
+    首个 = 桩后端("camoufox")
+    次个 = 桩后端("pydoll")
+    链路 = 后端链([首个, 次个])
 
-    result = chain.solve(URL, timeout=5.0)
+    结果 = 链路.求解(目标网址, 超时=42.0)
 
-    assert result.clearance == "pydoll-value"
-    assert [a.backend for a in result.attempts] == ["camoufox", "pydoll"]
-    assert [a.ok for a in result.attempts] == [False, True]
-    assert result.attempts[0].error == "blocked"
-    assert result.attempts[1].error is None
-    assert all(a.seconds >= 0 for a in result.attempts)
+    assert 结果.凭据 == 首个._结果.凭据
+    assert [条目.后端名 for 条目 in 结果.尝试记录] == ["camoufox"]
+    assert 结果.尝试记录[0].成功 is True
+    assert 结果.尝试记录[0].错误 is None
+    assert 首个.调用次数 == 1
+    assert 次个.调用次数 == 0
+    assert 首个.超时参数 == [42.0]
 
 
-def test_all_fail_aggregates_attempts():
-    chain = BackendChain(
+def test_顺序被遵守且失败后回退():
+    首个 = 桩后端("camoufox", 错误=求解失败("被拦截"))
+    次个 = 桩后端("pydoll", 结果=造结果("pydoll-value"))
+    链路 = 后端链([首个, 次个])
+
+    结果 = 链路.求解(目标网址, 超时=5.0)
+
+    assert 结果.凭据 == "pydoll-value"
+    assert [条目.后端名 for 条目 in 结果.尝试记录] == ["camoufox", "pydoll"]
+    assert [条目.成功 for 条目 in 结果.尝试记录] == [False, True]
+    assert 结果.尝试记录[0].错误 == "被拦截"
+    assert 结果.尝试记录[1].错误 is None
+    assert all(条目.秒数 >= 0 for 条目 in 结果.尝试记录)
+
+
+def test_全部失败时汇总尝试记录():
+    链路 = 后端链(
         [
-            StubBackend("camoufox", error=SolveFailed("no cookie")),
-            StubBackend("pydoll", error=SolveFailed("chrome crashed")),
+            桩后端("camoufox", 错误=求解失败("没有饼干")),
+            桩后端("pydoll", 错误=求解失败("Chrome 崩溃")),
         ]
     )
 
-    with pytest.raises(ChainSolveFailed) as info:
-        chain.solve(URL, timeout=5.0)
+    with pytest.raises(链求解失败) as 信息:
+        链路.求解(目标网址, 超时=5.0)
 
-    error = info.value
-    assert isinstance(error, SolveFailed)
-    assert [a.backend for a in error.attempts] == ["camoufox", "pydoll"]
-    assert all(a.ok is False for a in error.attempts)
-    assert "camoufox: no cookie" in str(error)
-    assert "pydoll: chrome crashed" in str(error)
+    异常 = 信息.value
+    assert isinstance(异常, 求解失败)
+    assert [条目.后端名 for 条目 in 异常.尝试记录] == ["camoufox", "pydoll"]
+    assert all(条目.成功 is False for 条目 in 异常.尝试记录)
+    assert "camoufox: 没有饼干" in str(异常)
+    assert "pydoll: Chrome 崩溃" in str(异常)
 
 
-def test_all_timeout_raises_timeout_with_attempts():
-    chain = BackendChain(
+def test_全部超时抛出超时并带尝试记录():
+    链路 = 后端链(
         [
-            StubBackend("camoufox", error=SolveTimeout("t1")),
-            StubBackend("pydoll", error=SolveTimeout("t2")),
+            桩后端("camoufox", 错误=求解超时("超时一")),
+            桩后端("pydoll", 错误=求解超时("超时二")),
         ]
     )
 
-    with pytest.raises(ChainSolveTimeout) as info:
-        chain.solve(URL, timeout=1.0)
+    with pytest.raises(链求解超时) as 信息:
+        链路.求解(目标网址, 超时=1.0)
 
-    assert isinstance(info.value, SolveTimeout)
-    assert len(info.value.attempts) == 2
+    assert isinstance(信息.value, 求解超时)
+    assert len(信息.value.尝试记录) == 2
 
 
-def test_mixed_timeout_and_failure_is_not_a_timeout():
-    chain = BackendChain(
+def test_混合超时与失败不算超时():
+    链路 = 后端链(
         [
-            StubBackend("camoufox", error=SolveTimeout("t1")),
-            StubBackend("pydoll", error=SolveFailed("boom")),
+            桩后端("camoufox", 错误=求解超时("超时一")),
+            桩后端("pydoll", 错误=求解失败("炸了")),
         ]
     )
 
-    with pytest.raises(ChainSolveFailed):
-        chain.solve(URL, timeout=1.0)
+    with pytest.raises(链求解失败):
+        链路.求解(目标网址, 超时=1.0)
 
 
-def test_unavailable_backend_is_skipped_without_calling_solve():
-    unavailable = StubBackend("pydoll", available=(False, "Chrome/Chromium not found"))
-    fallback = StubBackend("camoufox")
-    chain = BackendChain([unavailable, fallback])
+def test_不可用后端被跳过且不调用求解():
+    不可用 = 桩后端("pydoll", 可用状态=(False, "未找到 Chrome/Chromium"))
+    回退 = 桩后端("camoufox")
+    链路 = 后端链([不可用, 回退])
 
-    result = chain.solve(URL, timeout=5.0)
+    结果 = 链路.求解(目标网址, 超时=5.0)
 
-    assert unavailable.calls == 0
-    assert fallback.calls == 1
-    assert result.attempts[0].backend == "pydoll"
-    assert result.attempts[0].ok is False
-    assert "Chrome/Chromium not found" in str(result.attempts[0].error)
-    assert result.attempts[0].seconds == 0.0
-
-
-def test_availability_probe_exception_is_contained():
-    broken = StubBackend("pydoll", available_error=RuntimeError("probe exploded"))
-    fallback = StubBackend("camoufox")
-    chain = BackendChain([broken, fallback])
-
-    result = chain.solve(URL, timeout=5.0)
-
-    assert result.attempts[0].ok is False
-    assert "probe exploded" in str(result.attempts[0].error)
-    assert broken.calls == 0
+    assert 不可用.调用次数 == 0
+    assert 回退.调用次数 == 1
+    assert 结果.尝试记录[0].后端名 == "pydoll"
+    assert 结果.尝试记录[0].成功 is False
+    assert "未找到 Chrome/Chromium" in str(结果.尝试记录[0].错误)
+    assert 结果.尝试记录[0].秒数 == 0.0
 
 
-def test_unexpected_backend_exception_falls_through():
-    crashing = StubBackend("camoufox", error=RuntimeError("segfault"))
-    fallback = StubBackend("pydoll")
-    chain = BackendChain([crashing, fallback])
+def test_可用性探测异常被隔离():
+    损坏 = 桩后端("pydoll", 探测错误=RuntimeError("探测爆炸"))
+    回退 = 桩后端("camoufox")
+    链路 = 后端链([损坏, 回退])
 
-    result = chain.solve(URL, timeout=5.0)
+    结果 = 链路.求解(目标网址, 超时=5.0)
 
-    assert result.attempts[0].error == "RuntimeError: segfault"
-    assert fallback.calls == 1
-
-
-def test_chain_satisfies_backend_protocol_and_uses_first_name():
-    chain = BackendChain([StubBackend("camoufox"), StubBackend("pydoll")])
-    assert isinstance(chain, Backend)
-    assert chain.name == "camoufox"
+    assert 结果.尝试记录[0].成功 is False
+    assert "探测爆炸" in str(结果.尝试记录[0].错误)
+    assert 损坏.调用次数 == 0
 
 
-def test_empty_chain_is_rejected():
-    with pytest.raises(ValueError, match="at least one backend"):
-        BackendChain([])
+def test_后端未预期异常时回退():
+    崩溃 = 桩后端("camoufox", 错误=RuntimeError("段错误"))
+    回退 = 桩后端("pydoll")
+    链路 = 后端链([崩溃, 回退])
+
+    结果 = 链路.求解(目标网址, 超时=5.0)
+
+    assert 结果.尝试记录[0].错误 == "RuntimeError: 段错误"
+    assert 回退.调用次数 == 1
 
 
-def test_attempt_dict_shape():
-    attempt = Attempt(backend="pydoll", ok=False, error="nope", seconds=1.23456)
-    assert attempt.as_dict() == {
+def test_链路满足后端协议并使用首个名称():
+    链路 = 后端链([桩后端("camoufox"), 桩后端("pydoll")])
+    assert isinstance(链路, 后端)
+    assert 链路.名称 == "camoufox"
+
+
+def test_空链路被拒绝():
+    with pytest.raises(ValueError, match="至少需要一个后端"):
+        后端链([])
+
+
+def test_尝试字典结构():
+    条目 = 单次尝试(后端名="pydoll", 成功=False, 错误="不行", 秒数=1.23456)
+    assert 条目.转字典() == {
         "backend": "pydoll",
         "ok": False,
-        "error": "nope",
+        "error": "不行",
         "seconds": 1.235,
     }
 
 
-def _settings(tmp_path) -> Settings:
-    return Settings(
+def _配置(tmp_path) -> 配置:
+    return 配置(
         _env_file=None,
-        auth_token=TOKEN,
+        auth_token=令牌,
         cache_path=str(tmp_path / "cache.sqlite3"),
         solve_timeout=5.0,
         backends="camoufox,pydoll",
@@ -202,40 +202,40 @@ def _settings(tmp_path) -> Settings:
     )
 
 
-def test_solve_response_includes_attempt_trace(tmp_path):
-    chain = BackendChain([StubBackend("camoufox")])
-    app = create_app(settings=_settings(tmp_path), backend=chain)
-    with TestClient(app) as client:
-        response = client.post("/solve", json={"url": URL}, headers=AUTH)
-    assert response.status_code == 200
-    body = response.json()
-    assert body["attempts"] == [
+def test_求解响应包含尝试记录(tmp_path):
+    链路 = 后端链([桩后端("camoufox")])
+    应用 = 创建应用(配置对象=_配置(tmp_path), 后端对象=链路)
+    with TestClient(应用) as 客户端:
+        响应 = 客户端.post("/solve", json={"url": 目标网址}, headers=鉴权头)
+    assert 响应.status_code == 200
+    正文 = 响应.json()
+    assert 正文["attempts"] == [
         {"backend": "camoufox", "ok": True, "error": None, "seconds": 0.0}
     ]
 
 
-def test_cached_solve_returns_empty_attempt_trace(tmp_path):
-    chain = BackendChain([StubBackend("camoufox")])
-    app = create_app(settings=_settings(tmp_path), backend=chain)
-    with TestClient(app) as client:
-        client.post("/solve", json={"url": URL}, headers=AUTH)
-        second = client.post("/solve", json={"url": URL}, headers=AUTH)
-    assert second.json()["cached"] is True
-    assert second.json()["attempts"] == []
+def test_缓存命中返回空尝试记录(tmp_path):
+    链路 = 后端链([桩后端("camoufox")])
+    应用 = 创建应用(配置对象=_配置(tmp_path), 后端对象=链路)
+    with TestClient(应用) as 客户端:
+        客户端.post("/solve", json={"url": 目标网址}, headers=鉴权头)
+        第二次 = 客户端.post("/solve", json={"url": 目标网址}, headers=鉴权头)
+    assert 第二次.json()["cached"] is True
+    assert 第二次.json()["attempts"] == []
 
 
-def test_pydoll_only_without_chrome_returns_clear_error(tmp_path):
-    settings = _settings(tmp_path)
-    settings.backends = "pydoll"
-    settings.chrome_path = str(tmp_path / "no-such-chrome.exe")
-    app = create_app(settings=settings)  # must not crash at startup
+def test_仅pydoll且无Chrome时返回清晰错误(tmp_path):
+    配置对象 = _配置(tmp_path)
+    配置对象.backends = "pydoll"
+    配置对象.chrome_path = str(tmp_path / "no-such-chrome.exe")
+    应用 = 创建应用(配置对象=配置对象)  # 启动时不得崩溃
 
-    with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.post("/solve", json={"url": URL}, headers=AUTH)
+    with TestClient(应用, raise_server_exceptions=False) as 客户端:
+        响应 = 客户端.post("/solve", json={"url": 目标网址}, headers=鉴权头)
 
-    assert response.status_code == 502
-    error = response.json()["error"]
-    assert error["code"] == "SOLVE_FAILED"
-    assert error["attempts"][0]["backend"] == "pydoll"
-    assert "Chrome" in error["message"]
-    assert "CF_SLAYER_CHROME_PATH" in error["attempts"][0]["error"]
+    assert 响应.status_code == 502
+    错误 = 响应.json()["error"]
+    assert 错误["code"] == "SOLVE_FAILED"
+    assert 错误["attempts"][0]["backend"] == "pydoll"
+    assert "Chrome" in 错误["message"]
+    assert "CF_SLAYER_CHROME_PATH" in 错误["attempts"][0]["error"]

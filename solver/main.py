@@ -1,4 +1,4 @@
-"""FastAPI service: /solve, /replay, /health, /stats."""
+"""FastAPI 服务：/solve、/replay、/health、/stats。"""
 
 from __future__ import annotations
 
@@ -20,350 +20,360 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from client.replay import ReplayResult, replay
+from client.replay import 回放, 回放结果
 
 from . import __version__
-from .cache import CachedClearance, SQLiteCache
-from .chain import BackendChain
-from .config import Settings, load_settings
-from .engine import Attempt, Backend, CamoufoxBackend, ClearanceResult, domain_of
+from .cache import SQLite缓存, 缓存凭据
+from .chain import 后端链
+from .config import 加载配置, 配置
+from .engine import Camoufox后端, 单次尝试, 后端, 提取域名, 放行结果
 from .errors import (
     AUTH_MISSING,
     BAD_REQUEST,
     SOLVE_FAILED,
     SOLVE_TIMEOUT,
     UPSTREAM_403,
-    ApiError,
-    SolveFailed,
-    SolveTimeout,
+    接口错误,
+    求解失败,
+    求解超时,
 )
-from .prewarm import PrewarmWorker
-from .pydoll_backend import PydollBackend
+from .prewarm import 预热器
+from .pydoll_backend import Pydoll后端
 
-log = logging.getLogger(__name__)
+日志 = logging.getLogger(__name__)
 
 
-class SolveRequest(BaseModel):
+class 求解请求(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     want: str = "clearance"
 
 
 @dataclass
-class Stats:
-    cache_hits: int = 0
-    solves: int = 0
-    errors: int = 0
-    prewarm_errors: int = 0
-    total_solve_seconds: float = 0.0
-    started_at: float = field(default_factory=time.time)
-    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+class 统计:
+    缓存命中: int = 0
+    求解次数: int = 0
+    错误次数: int = 0
+    预热错误: int = 0
+    总求解秒数: float = 0.0
+    启动时刻: float = field(default_factory=time.time)
+    _锁: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def record_hit(self) -> None:
-        with self._lock:
-            self.cache_hits += 1
+    def 记录命中(self) -> None:
+        with self._锁:
+            self.缓存命中 += 1
 
-    def record_solve(self, seconds: float) -> None:
-        with self._lock:
-            self.solves += 1
-            self.total_solve_seconds += max(0.0, seconds)
+    def 记录求解(self, 秒数: float) -> None:
+        with self._锁:
+            self.求解次数 += 1
+            self.总求解秒数 += max(0.0, 秒数)
 
-    def record_error(self) -> None:
-        with self._lock:
-            self.errors += 1
+    def 记录错误(self) -> None:
+        with self._锁:
+            self.错误次数 += 1
 
-    def record_prewarm_error(self) -> None:
-        with self._lock:
-            self.prewarm_errors += 1
+    def 记录预热错误(self) -> None:
+        with self._锁:
+            self.预热错误 += 1
 
-    def snapshot(self) -> dict[str, int | float]:
-        with self._lock:
-            avg = self.total_solve_seconds / self.solves if self.solves else 0.0
+    def 快照(self) -> dict[str, int | float]:
+        with self._锁:
+            平均值 = self.总求解秒数 / self.求解次数 if self.求解次数 else 0.0
             return {
-                "cache_hits": self.cache_hits,
-                "solves": self.solves,
-                "errors": self.errors,
-                "prewarm_errors": self.prewarm_errors,
-                "avg_solve_seconds": round(avg, 2),
-                "uptime_seconds": round(time.time() - self.started_at, 1),
+                "cache_hits": self.缓存命中,
+                "solves": self.求解次数,
+                "errors": self.错误次数,
+                "prewarm_errors": self.预热错误,
+                "avg_solve_seconds": round(平均值, 2),
+                "uptime_seconds": round(time.time() - self.启动时刻, 1),
             }
 
 
-class Service:
-    def __init__(self, settings: Settings, cache: SQLiteCache, backend: Backend) -> None:
-        self.settings = settings
-        self.cache = cache
-        self.backend = backend
-        self.stats = Stats()
+class 服务:
+    def __init__(self, 配置对象: 配置, 缓存: SQLite缓存, 后端对象: 后端) -> None:
+        self.配置 = 配置对象
+        self.缓存 = 缓存
+        self.后端 = 后端对象
+        self.统计 = 统计()
 
-    async def solve(self, url: str, force: bool = False) -> dict[str, Any]:
-        domain = domain_of(url)
-        if not force:
-            cached = self.cache.get(domain)
-            if cached is not None:
-                self.stats.record_hit()
-                return self._cached_response(cached)
+    async def 求解(self, 网址: str, 强制: bool = False) -> dict[str, Any]:
+        域名 = 提取域名(网址)
+        if not 强制:
+            缓存项 = self.缓存.查询(域名)
+            if 缓存项 is not None:
+                self.统计.记录命中()
+                return self._缓存响应(缓存项)
 
-        result = await self._run_backend(url)
-        cached = self._store(domain, result)
+        结果 = await self._调用后端(网址)
+        缓存项 = self._入库(域名, 结果)
         return {
-            "clearance": cached.clearance,
-            "user_agent": cached.user_agent,
-            "domain": domain,
-            "expires_in": cached.remaining(),
+            "clearance": 缓存项.凭据,
+            "user_agent": 缓存项.用户代理,
+            "domain": 域名,
+            "expires_in": 缓存项.剩余(),
             "cached": False,
-            "solve_seconds": round(result.solve_seconds, 2),
-            "attempts": [attempt.as_dict() for attempt in result.attempts],
+            "solve_seconds": round(结果.耗时秒, 2),
+            "attempts": [条目.转字典() for 条目 in 结果.尝试记录],
         }
 
-    async def replay(self, url: str) -> dict[str, Any]:
-        domain = domain_of(url)
-        cached = self.cache.get(domain)
-        resolved = False
-        if cached is None:
-            cached = await self._solve_and_store(url)
-            resolved = True
+    async def 回放(self, 网址: str) -> dict[str, Any]:
+        域名 = 提取域名(网址)
+        缓存项 = self.缓存.查询(域名)
+        已重解 = False
+        if 缓存项 is None:
+            缓存项 = await self._求解并入库(网址)
+            已重解 = True
 
-        result = await self._replay_once(url, cached, domain)
-        if result.challenge_page:
-            # Credential died (TTL rolled over, IP drifted, or UA mismatch):
-            # drop it and re-solve exactly once before giving up.
-            log.info("replay challenged for %s; re-solving once", domain)
-            self.cache.invalidate(domain)
-            cached = await self._solve_and_store(url)
-            result = await self._replay_once(url, cached, domain)
-            resolved = True
-            if result.challenge_page:
-                self.stats.record_error()
-                raise ApiError(
+        结果 = await self._回放一次(网址, 缓存项, 域名)
+        if 结果.挑战页:
+            # 凭据已死（TTL 到期、IP 漂移或 UA 不匹配）：
+            # 删除它并只重解一次，然后放弃。
+            日志.info("%s 回放被拦截；重新求解一次", 域名)
+            self.缓存.删除(域名)
+            缓存项 = await self._求解并入库(网址)
+            结果 = await self._回放一次(网址, 缓存项, 域名)
+            已重解 = True
+            if 结果.挑战页:
+                self.统计.记录错误()
+                raise 接口错误(
                     UPSTREAM_403,
-                    f"target still returned a challenge after re-solve "
-                    f"(status {result.status}, {result.length} bytes)",
+                    f"重新求解后目标仍返回拦截页"
+                    f"（状态 {结果.状态码}，{结果.长度} 字节）",
                 )
 
         return {
-            "url": result.url,
-            "domain": domain,
-            "status": result.status,
-            "length": result.length,
-            "challenge_page": result.challenge_page,
-            "replay_seconds": result.elapsed_seconds,
-            "resolved": resolved,
+            "url": 结果.网址,
+            "domain": 域名,
+            "status": 结果.状态码,
+            "length": 结果.长度,
+            "challenge_page": 结果.挑战页,
+            "replay_seconds": 结果.耗时秒,
+            "resolved": 已重解,
         }
 
-    def _cached_response(self, cached: CachedClearance) -> dict[str, Any]:
+    def _缓存响应(self, 缓存项: 缓存凭据) -> dict[str, Any]:
         return {
-            "clearance": cached.clearance,
-            "user_agent": cached.user_agent,
-            "domain": cached.domain,
-            "expires_in": cached.remaining(),
+            "clearance": 缓存项.凭据,
+            "user_agent": 缓存项.用户代理,
+            "domain": 缓存项.域名,
+            "expires_in": 缓存项.剩余(),
             "cached": True,
             "solve_seconds": 0.0,
             "attempts": [],
         }
 
-    async def _run_backend(self, url: str) -> ClearanceResult:
+    async def _调用后端(self, 网址: str) -> 放行结果:
         try:
-            result = await anyio.to_thread.run_sync(
-                self.backend.solve, url, self.settings.solve_timeout
+            结果 = await anyio.to_thread.run_sync(
+                self.后端.求解, 网址, self.配置.solve_timeout
             )
-        except SolveTimeout as exc:
-            self.stats.record_error()
-            raise ApiError(SOLVE_TIMEOUT, str(exc), extra=_attempts_extra(exc)) from exc
-        except SolveFailed as exc:
-            self.stats.record_error()
-            raise ApiError(SOLVE_FAILED, str(exc), extra=_attempts_extra(exc)) from exc
-        except Exception as exc:
-            self.stats.record_error()
-            log.exception("backend raised an unexpected error")
-            raise ApiError(SOLVE_FAILED, f"backend error: {exc}") from exc
-        self.stats.record_solve(result.solve_seconds)
-        return result
+        except 求解超时 as 异常:
+            self.统计.记录错误()
+            raise 接口错误(
+                SOLVE_TIMEOUT, str(异常), 附加信息=_尝试附加信息(异常)
+            ) from 异常
+        except 求解失败 as 异常:
+            self.统计.记录错误()
+            raise 接口错误(
+                SOLVE_FAILED, str(异常), 附加信息=_尝试附加信息(异常)
+            ) from 异常
+        except Exception as 异常:
+            self.统计.记录错误()
+            日志.exception("后端抛出未预期错误")
+            raise 接口错误(SOLVE_FAILED, f"后端异常：{异常}") from 异常
+        self.统计.记录求解(结果.耗时秒)
+        return 结果
 
-    async def _solve_and_store(self, url: str) -> CachedClearance:
-        result = await self._run_backend(url)
-        return self._store(domain_of(url), result)
+    async def _求解并入库(self, 网址: str) -> 缓存凭据:
+        结果 = await self._调用后端(网址)
+        return self._入库(提取域名(网址), 结果)
 
-    def _store(self, domain: str, result: ClearanceResult) -> CachedClearance:
-        expires_in = max(1, min(self.settings.ttl_seconds, result.expires_in))
-        return self.cache.put(domain, result.clearance, result.user_agent, ttl=expires_in)
+    def _入库(self, 域名: str, 结果: 放行结果) -> 缓存凭据:
+        剩余秒数 = max(1, min(self.配置.ttl_seconds, 结果.剩余秒数))
+        return self.缓存.写入(
+            域名, 结果.凭据, 结果.用户代理, 有效期=剩余秒数
+        )
 
-    async def _replay_once(
-        self, url: str, cached: CachedClearance, domain: str
-    ) -> ReplayResult:
-        call = functools.partial(
-            replay,
-            url,
-            cached.clearance,
-            cached.user_agent,
-            domain,
-            timeout=self.settings.replay_timeout,
+    async def _回放一次(
+        self, 网址: str, 缓存项: 缓存凭据, 域名: str
+    ) -> 回放结果:
+        调用 = functools.partial(
+            回放,
+            网址,
+            缓存项.凭据,
+            缓存项.用户代理,
+            域名,
+            超时=self.配置.replay_timeout,
         )
         try:
-            return await anyio.to_thread.run_sync(call)
-        except ValueError as exc:
-            raise ApiError(BAD_REQUEST, str(exc)) from exc
-        except Exception as exc:
-            self.stats.record_error()
-            raise ApiError(UPSTREAM_403, f"replay request failed: {exc}") from exc
+            return await anyio.to_thread.run_sync(调用)
+        except ValueError as 异常:
+            raise 接口错误(BAD_REQUEST, str(异常)) from 异常
+        except Exception as 异常:
+            self.统计.记录错误()
+            raise 接口错误(UPSTREAM_403, f"回放请求失败：{异常}") from 异常
 
 
-def validate_url(raw: str) -> str:
-    url = raw.strip()
-    if not url or len(url) > 2048:
-        raise ApiError(BAD_REQUEST, "url must be 1-2048 characters")
-    parts = urlsplit(url)
-    if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ApiError(BAD_REQUEST, "url must be an absolute http(s) URL")
-    return url
+def 校验网址(原始值: str) -> str:
+    网址 = 原始值.strip()
+    if not 网址 or len(网址) > 2048:
+        raise 接口错误(BAD_REQUEST, "url 长度必须为 1-2048 个字符")
+    片段 = urlsplit(网址)
+    if 片段.scheme not in ("http", "https") or not 片段.hostname:
+        raise 接口错误(BAD_REQUEST, "url 必须是绝对的 http(s) 网址")
+    return 网址
 
 
-async def require_token(request: Request) -> str:
-    service: Service = request.app.state.service
-    scheme, _, token = request.headers.get("authorization", "").partition(" ")
-    token = token.strip()
-    if scheme.lower() != "bearer" or not token or not secrets.compare_digest(
-        token, service.settings.auth_token
+async def 校验令牌(请求: Request) -> str:
+    服务实例: 服务 = 请求.app.state.服务
+    方案, _, 令牌 = 请求.headers.get("authorization", "").partition(" ")
+    令牌 = 令牌.strip()
+    if 方案.lower() != "bearer" or not 令牌 or not secrets.compare_digest(
+        令牌, 服务实例.配置.auth_token
     ):
-        raise ApiError(AUTH_MISSING, "missing or invalid bearer token")
-    return token
+        raise 接口错误(AUTH_MISSING, "Bearer 令牌缺失或无效")
+    return 令牌
 
 
-Auth = Annotated[str, Depends(require_token)]
+鉴权 = Annotated[str, Depends(校验令牌)]
 
 
-def _attempts_extra(exc: BaseException) -> dict[str, object]:
-    attempts = getattr(exc, "attempts", None)
-    if not attempts:
+def _尝试附加信息(异常: BaseException) -> dict[str, object]:
+    尝试记录 = getattr(异常, "尝试记录", None)
+    if not 尝试记录:
         return {}
-    return {"attempts": [a.as_dict() if isinstance(a, Attempt) else a for a in attempts]}
+    return {
+        "attempts": [
+            条目.转字典() if isinstance(条目, 单次尝试) else 条目 for 条目 in 尝试记录
+        ]
+    }
 
 
-def build_backend(settings: Settings) -> Backend:
-    """Build the configured chain. Unknown names are skipped, not fatal."""
-    chain: list[Backend] = []
-    for name in settings.backend_names:
-        if name == "camoufox":
-            chain.append(
-                CamoufoxBackend(
-                    headless=settings.headless,
-                    challenge_timeout=settings.challenge_timeout,
-                    poll_interval=settings.poll_interval,
+def 构建后端(配置对象: 配置) -> 后端:
+    """构建配置指定的链路。未知名称会被跳过，而不是致命错误。"""
+    链路: list[后端] = []
+    for 名称 in 配置对象.后端名称列表:
+        if 名称 == "camoufox":
+            链路.append(
+                Camoufox后端(
+                    无头=配置对象.headless,
+                    挑战超时=配置对象.challenge_timeout,
+                    轮询间隔=配置对象.poll_interval,
                 )
             )
-        elif name == "pydoll":
-            chain.append(
-                PydollBackend(
-                    headless=settings.headless,
-                    challenge_timeout=settings.challenge_timeout,
-                    poll_interval=settings.poll_interval,
-                    chrome_path=settings.chrome_path or None,
+        elif 名称 == "pydoll":
+            链路.append(
+                Pydoll后端(
+                    无头=配置对象.headless,
+                    挑战超时=配置对象.challenge_timeout,
+                    轮询间隔=配置对象.poll_interval,
+                    Chrome路径=配置对象.chrome_path or None,
                 )
             )
         else:
-            log.warning("unknown backend %r in CF_SLAYER_BACKENDS; ignored", name)
-    if not chain:
+            日志.warning("CF_SLAYER_BACKENDS 中出现未知后端 %r；已忽略", 名称)
+    if not 链路:
         raise RuntimeError(
-            "no usable backends configured; set CF_SLAYER_BACKENDS=camoufox,pydoll"
+            "没有可用后端；请设置 CF_SLAYER_BACKENDS=camoufox,pydoll"
         )
-    return BackendChain(chain)
+    return 后端链(链路)
 
 
-def create_app(
-    settings: Settings | None = None,
-    backend: Backend | None = None,
-    cache: SQLiteCache | None = None,
+def 创建应用(
+    配置对象: 配置 | None = None,
+    后端对象: 后端 | None = None,
+    缓存: SQLite缓存 | None = None,
 ) -> FastAPI:
-    settings = settings or load_settings()
-    if not settings.auth_token:
-        raise RuntimeError("auth token is empty; use load_settings() or pass one explicitly")
-    backend = backend or build_backend(settings)
-    cache = cache or SQLiteCache(settings.cache_path, settings.ttl_seconds)
-    service = Service(settings, cache, backend)
-    prewarm: PrewarmWorker | None = None
-    if settings.prewarm_targets:
-        prewarm = PrewarmWorker(
-            service,
-            settings.prewarm_targets,
-            margin_seconds=settings.prewarm_margin,
-            interval=settings.prewarm_interval,
+    配置对象 = 配置对象 or 加载配置()
+    if not 配置对象.auth_token:
+        raise RuntimeError("auth_token 为空；请使用 加载配置() 或显式传入")
+    后端对象 = 后端对象 or 构建后端(配置对象)
+    缓存 = 缓存 or SQLite缓存(配置对象.cache_path, 配置对象.ttl_seconds)
+    服务实例 = 服务(配置对象, 缓存, 后端对象)
+    预热器实例: 预热器 | None = None
+    if 配置对象.预热目标列表:
+        预热器实例 = 预热器(
+            服务实例,
+            配置对象.预热目标列表,
+            余量秒=配置对象.prewarm_margin,
+            间隔=配置对象.prewarm_interval,
         )
 
     @asynccontextmanager
-    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        stop = asyncio.Event()
-        task: asyncio.Task[None] | None = None
-        if prewarm is not None:
-            task = asyncio.create_task(prewarm.run(stop))
+    async def 生命周期(_: FastAPI) -> AsyncIterator[None]:
+        停止信号 = asyncio.Event()
+        任务: asyncio.Task[None] | None = None
+        if 预热器实例 is not None:
+            任务 = asyncio.create_task(预热器实例.运行(停止信号))
         try:
             yield
         finally:
-            stop.set()
-            if task is not None:
+            停止信号.set()
+            if 任务 is not None:
                 try:
-                    await asyncio.wait_for(task, timeout=5)
+                    await asyncio.wait_for(任务, timeout=5)
                 except TimeoutError:
-                    task.cancel()
+                    任务.cancel()
                     with suppress(asyncio.CancelledError):
-                        await task
-            cache.close()
+                        await 任务
+            缓存.关闭()
 
-    app = FastAPI(title="cf-slayer", version=__version__, lifespan=lifespan)
-    app.state.service = service
-    app.state.prewarm = prewarm
+    应用 = FastAPI(title="cf-slayer", version=__version__, lifespan=生命周期)
+    应用.state.服务 = 服务实例
+    应用.state.预热器 = 预热器实例
 
-    @app.exception_handler(ApiError)
-    async def _api_error(_: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse(exc.payload(), status_code=exc.status_code)
+    @应用.exception_handler(接口错误)
+    async def _接口异常(_: Request, 异常: 接口错误) -> JSONResponse:
+        return JSONResponse(异常.响应体(), status_code=异常.状态码)
 
-    @app.exception_handler(RequestValidationError)
-    async def _invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
-        detail = "; ".join(
-            f"{'.'.join(str(part) for part in err['loc'])}: {err['msg']}"
-            for err in exc.errors()
+    @应用.exception_handler(RequestValidationError)
+    async def _请求校验异常(_: Request, 异常: RequestValidationError) -> JSONResponse:
+        详情 = "；".join(
+            f"{'.'.join(str(部分) for 部分 in 错误['loc'])}: {错误['msg']}"
+            for 错误 in 异常.errors()
         )
         return JSONResponse(
-            ApiError(BAD_REQUEST, f"invalid request: {detail}").payload(), status_code=400
+            接口错误(BAD_REQUEST, f"请求无效：{详情}").响应体(), status_code=400
         )
 
-    @app.exception_handler(Exception)
-    async def _unhandled(_: Request, exc: Exception) -> JSONResponse:
-        log.exception("unhandled error", exc_info=exc)
+    @应用.exception_handler(Exception)
+    async def _未处理异常(_: Request, 异常: Exception) -> JSONResponse:
+        日志.exception("未处理错误", exc_info=异常)
         return JSONResponse(
-            ApiError(SOLVE_FAILED, "internal error", status_code=500).payload(),
+            接口错误(SOLVE_FAILED, "内部错误", 状态码=500).响应体(),
             status_code=500,
         )
 
-    @app.post("/solve")
-    async def solve(payload: SolveRequest, _: Auth) -> dict[str, Any]:
-        if payload.want != "clearance":
-            raise ApiError(BAD_REQUEST, "v1 supports only want='clearance'")
-        return await service.solve(validate_url(payload.url))
+    @应用.post("/solve")
+    async def 求解(请求体: 求解请求, _: 鉴权) -> dict[str, Any]:
+        if 请求体.want != "clearance":
+            raise 接口错误(BAD_REQUEST, "v1 仅支持 want='clearance'")
+        return await 服务实例.求解(校验网址(请求体.url))
 
-    @app.get("/replay")
-    async def replay_target(url: Annotated[str, Query()], _: Auth) -> dict[str, Any]:
-        return await service.replay(validate_url(url))
+    @应用.get("/replay")
+    async def 回放目标(url: Annotated[str, Query()], _: 鉴权) -> dict[str, Any]:
+        return await 服务实例.回放(校验网址(url))
 
-    @app.get("/health")
-    async def health() -> dict[str, str]:
-        return {"state": "ready", "browser": service.backend.name}
+    @应用.get("/health")
+    async def 健康检查() -> dict[str, str]:
+        return {"state": "ready", "browser": 服务实例.后端.名称}
 
-    @app.get("/stats")
-    async def stats(_: Auth) -> dict[str, int | float]:
-        snapshot = service.stats.snapshot()
-        snapshot["cached_domains"] = service.cache.count()
-        return snapshot
+    @应用.get("/stats")
+    async def 统计信息(_: 鉴权) -> dict[str, int | float]:
+        快照 = 服务实例.统计.快照()
+        快照["cached_domains"] = 服务实例.缓存.计数()
+        return 快照
 
-    return app
-
-
-_app: FastAPI | None = None
+    return 应用
 
 
-def __getattr__(name: str) -> Any:
-    """Lazily build the ASGI app so importing this module has no side effects."""
-    if name == "app":
-        global _app
-        if _app is None:
-            _app = create_app()
-        return _app
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+_应用实例: FastAPI | None = None
+
+
+def __getattr__(属性名: str) -> Any:
+    """惰性构建 ASGI 应用，使导入本模块没有副作用。"""
+    if 属性名 == "app":
+        global _应用实例
+        if _应用实例 is None:
+            _应用实例 = 创建应用()
+        return _应用实例
+    raise AttributeError(f"module {__name__!r} has no attribute {属性名!r}")

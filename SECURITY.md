@@ -13,7 +13,7 @@ operator.
 Do not open a public issue for a vulnerability. Report it privately through
 GitHub Security Advisories for this repository:
 
-<https://github.com/ShinRyu04/Cloudflare-Bitch/security/advisories/new>
+<https://github.com/ShinRyu04/CF-Slayer/security/advisories/new>
 
 Include the affected component (Python service, `client-go`, or scripts), a
 minimal reproduction, and the impact you believe it has. You will get an

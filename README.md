@@ -1,6 +1,6 @@
 # CF-Slayer
 
-[![CI](https://img.shields.io/github/actions/workflow/status/ShinRyu04/Cloudflare-Bitch/ci.yml?branch=main&label=CI)](https://github.com/ShinRyu04/Cloudflare-Bitch/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ShinRyu04/CF-Slayer/ci.yml?branch=main&label=CI)](https://github.com/ShinRyu04/CF-Slayer/actions/workflows/ci.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB)](https://www.python.org/)
 [![Go 1.23](https://img.shields.io/badge/go-1.23-00ADD8)](https://go.dev/)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL%20v3-blue.svg)](LICENSE)
@@ -453,7 +453,7 @@ Chinese text.
 - **Zyrex** — original author of the commit history.
 
 Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[contributors graph](https://github.com/ShinRyu04/Cloudflare-Bitch/graphs/contributors).
+[contributors graph](https://github.com/ShinRyu04/CF-Slayer/graphs/contributors).
 
 ## License
 

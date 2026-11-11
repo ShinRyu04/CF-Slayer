@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+import re
 import secrets
 import threading
 import time
@@ -46,6 +47,8 @@ from .pydoll_backend import Pydoll后端
 class 求解请求(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     want: str = "clearance"
+    # 仅 want=turnstile 使用；clearance 路径忽略它。
+    sitekey: str | None = None
 
 
 @dataclass
@@ -54,6 +57,8 @@ class 统计:
     求解次数: int = 0
     错误次数: int = 0
     预热错误: int = 0
+    令牌求解次数: int = 0
+    令牌错误次数: int = 0
     总求解秒数: float = 0.0
     启动时刻: float = field(default_factory=time.time)
     _锁: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -75,6 +80,14 @@ class 统计:
         with self._锁:
             self.预热错误 += 1
 
+    def 记录令牌求解(self) -> None:
+        with self._锁:
+            self.令牌求解次数 += 1
+
+    def 记录令牌错误(self) -> None:
+        with self._锁:
+            self.令牌错误次数 += 1
+
     def 快照(self) -> dict[str, int | float]:
         with self._锁:
             平均值 = self.总求解秒数 / self.求解次数 if self.求解次数 else 0.0
@@ -84,6 +97,8 @@ class 统计:
                 "errors": self.错误次数,
                 "prewarm_errors": self.预热错误,
                 "avg_solve_seconds": round(平均值, 2),
+                "tokens_solved": self.令牌求解次数,
+                "token_errors": self.令牌错误次数,
                 "uptime_seconds": round(time.time() - self.启动时刻, 1),
             }
 
@@ -113,6 +128,44 @@ class 服务:
             "cached": False,
             "solve_seconds": round(结果.耗时秒, 2),
             "attempts": [条目.转字典() for 条目 in 结果.尝试记录],
+        }
+
+    async def 求解令牌(self, 网址: str, sitekey: str) -> dict[str, Any]:
+        """产出一个一次性 Turnstile 令牌。
+
+        令牌首次使用即被消费，因此本方法绝不读写 ``self.缓存``；统计也单独
+        计数，避免污染 clearance 的平均求解时间。
+        """
+        调用 = getattr(self.后端, "求解令牌", None)
+        if not callable(调用):
+            raise 接口错误(SOLVE_FAILED, "后端链不支持 Turnstile 令牌")
+        try:
+            结果 = await anyio.to_thread.run_sync(
+                调用, 网址, sitekey, self.配置.solve_timeout
+            )
+        except 求解超时 as 异常:
+            self.统计.记录令牌错误()
+            raise 接口错误(
+                SOLVE_TIMEOUT, str(异常), 附加信息=_尝试附加信息(异常)
+            ) from 异常
+        except 求解失败 as 异常:
+            self.统计.记录令牌错误()
+            raise 接口错误(
+                SOLVE_FAILED, str(异常), 附加信息=_尝试附加信息(异常)
+            ) from 异常
+        except Exception as 异常:
+            self.统计.记录令牌错误()
+            日志.exception("后端求解 Turnstile 时抛出未预期错误")
+            raise 接口错误(SOLVE_FAILED, f"后端异常：{异常}") from 异常
+
+        self.统计.记录令牌求解()
+        return {
+            "want": "turnstile",
+            "token": 结果.令牌,
+            "user_agent": 结果.用户代理,
+            "domain": 提取域名(网址),
+            "solve_seconds": round(结果.耗时秒, 2),
+            "cached": False,
         }
 
     async def 回放(self, 网址: str) -> dict[str, Any]:
@@ -221,6 +274,26 @@ def 校验网址(原始值: str) -> str:
     if 片段.scheme not in ("http", "https") or not 片段.hostname:
         raise 接口错误(BAD_REQUEST, "url 必须是绝对的 http(s) 网址")
     return 网址
+
+
+站点密钥模式 = re.compile(r"^0x[0-9a-zA-Z]{20,}$")
+
+
+def 校验站点密钥(原始值: str | None) -> str:
+    """校验 sitekey 的格式。
+
+    我们无法离线验证 sitekey 注册在哪个域名，所以只保证请求本身自洽：
+    网址是绝对的 http(s)，sitekey 形如 Cloudflare 的 0x 开头串。
+    两项都在启动浏览器之前完成，失败即快速返回 400。
+    """
+    值 = (原始值 or "").strip()
+    if not 值:
+        raise 接口错误(BAD_REQUEST, "want=turnstile 时必须提供 sitekey")
+    if 站点密钥模式.fullmatch(值) is None:
+        raise 接口错误(
+            BAD_REQUEST, "sitekey 必须是以 0x 开头的 20 位以上字母数字"
+        )
+    return 值
 
 
 async def 校验令牌(请求: Request) -> str:
@@ -345,9 +418,15 @@ def 创建应用(
 
     @应用.post("/solve")
     async def 求解(请求体: 求解请求, _: 鉴权) -> dict[str, Any]:
-        if 请求体.want != "clearance":
-            raise 接口错误(BAD_REQUEST, "v1 仅支持 want='clearance'")
-        return await 服务实例.求解(校验网址(请求体.url))
+        网址 = 校验网址(请求体.url)
+        if 请求体.want == "clearance":
+            return await 服务实例.求解(网址)
+        if 请求体.want == "turnstile":
+            return await 服务实例.求解令牌(网址, 校验站点密钥(请求体.sitekey))
+        raise 接口错误(
+            BAD_REQUEST,
+            f"不支持的 want={请求体.want!r}；仅支持 clearance 或 turnstile",
+        )
 
     @应用.get("/replay")
     async def 回放目标(url: Annotated[str, Query()], _: 鉴权) -> dict[str, Any]:

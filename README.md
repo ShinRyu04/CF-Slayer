@@ -197,6 +197,57 @@ curl -s http://127.0.0.1:8878/stats -H "Authorization: Bearer $TOKEN"
 `/stats` 的 `prewarm_errors` 而不中断循环。预热绕过缓存读取（`force=True`），
 因此仍有效但临近过期的凭据会被真正续期。
 
+## Go 客户端（v4）
+
+`client-go/` 是热路径的原生实现：只用 Go 标准库，无 CGO、无第三方依赖，
+要求 Go 1.23+。
+
+```bash
+cd client-go
+go test ./...
+go build -o demo.exe ./examples/demo
+
+# 单实例
+CF_SLAYER_AUTH_TOKEN=... ./demo.exe -url https://target.example/ -n 5
+
+# 多 worker：按域名粘性 + 故障摘除
+CF_SLAYER_SERVICES=http://127.0.0.1:8878,http://127.0.0.1:8879 \
+CF_SLAYER_AUTH_TOKEN=... ./demo.exe -url https://target.example/ -n 20
+```
+
+- `Client`：`Solve` 调 `/solve`，按域名缓存在内存（`sync.Map`），TTL 取
+  `expires_in`，并在 80% 处后台续期；命中缓存不产生任何 HTTP。`Do` 注入
+  `cf_clearance` 与求解时的精确 User-Agent；遇 403 作废缓存、重解一次、重试
+  一次，仍是 403 就原样返回。请求体不可重放时（无 `GetBody`）不重试。
+- `Pool`：`CF_SLAYER_SERVICES` 为逗号分隔列表。一致性哈希让同一域名粘住同一
+  worker（服务端按域缓存因此才能命中）。连续 3 次失败（连接拒绝/5xx/超时）
+  即从哈希环摘除；后台每 5 秒 `GET /health`，连续 2 次健康后自动回归。
+  `Status()` 暴露 `{URL, State, ConsecutiveFails}`。全部摘除时返回
+  `ErrNoWorkers`，不做无限重试。
+- 测试用 `httptest` 假服务，覆盖缓存命中、提前续期、403 恰好重解一次、连续
+  3 次 500 摘除、探针恢复、哈希稳定性，以及日志不含凭据。
+- 令牌只从 `CF_SLAYER_AUTH_TOKEN` 读取；凭据与 UA 从不写日志。
+
+v4 本地实测（`127.0.0.1` 假目标服务加两个真实 Python worker，**不是**真实
+Cloudflare 站点）：Python `/replay` 10 次中位数约 11.1 ms（7.7–12.6 ms）；
+Go 客户端回放 10 次中位数约 1.1 ms（0.6–1.8 ms）。差别来自绕开 FastAPI 与
+Python 请求栈，只代表本机热路径开销。
+
+## 多 worker 运行时（v4）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run-workers.ps1
+```
+
+默认启动 2 个 uvicorn（8878、8879），共享同一个 `cache.sqlite3`（WAL）。
+`-Count`、`-BasePort`、`-CachePath`、`-Token` 可调；`-NoWait` 只打印 PID。
+令牌不会被打印。
+
+跨进程缓存已验证：worker A 对 `127.0.0.1` 假目标完成一次真实 Camoufox 求解
+（34.8 秒）后，worker B 对同一域名 `/solve` 返回 `cached=true`、
+`expires_in=1796`，用时 153 ms。共享依赖 SQLite WAL，不依赖进程内状态；
+v4 没有改动存储层，也未观察到写锁阻塞。
+
 ## 已验证
 
 2026-11-12 真实站点 E2E，目标 `https://steamdb.info/`（Cloudflare 托管），
@@ -216,6 +267,9 @@ v2 验收（2026-11-12，同一机器，仅离线/本地）：
 | 完整离线套件 | 70 通过，ruff 干净（v1 的 36 项不变） |
 | 仅 pydoll 且 `CF_SLAYER_CHROME_PATH` 指向不存在路径 | 502 `SOLVE_FAILED`，`attempts[0].backend="pydoll"`，错误里含该路径；启动不受影响 |
 | 预热对接本地发饼干服务器，`TTL=30 秒`，间隔 5 秒 | 18.5 秒内 2 次续期，`cached_domains=1`，`prewarm_errors=0`；消费方 `/solve` 返回 `cached=true`，剩余 28 秒，`cache_hits=1` |
+| v4：`go test ./...` | 15 个离线测试通过（无浏览器、无网络） |
+| v4：跨进程缓存 | worker A 求解 34.8 秒后，worker B 同域 `/solve` 返回 `cached=true`，耗时 153 ms |
+| v4：demo 中途杀 worker | 回放持续 200；池状态第 68 次由 `healthy -> down`，重启 worker 后第 150 次由 `down -> healthy` |
 
 pydoll 后端本身已对 `https://example.com` 实跑（Chrome 157 启动、读饼干、
 读 `navigator.userAgent`）；尚未通过真实 Cloudflare 挑战，因此视作回退而非替代。
@@ -225,6 +279,7 @@ pydoll 后端本身已对 `https://example.com` 实跑（Chrome 157 启动、读
 ```bash
 .venv/Scripts/python -m pytest     # 70 个离线测试，无浏览器，无网络
 .venv/Scripts/ruff check .
+cd client-go && go test ./...      # 15 个 Go 离线测试，仅标准库
 ```
 
 引擎测试注入假浏览器工厂；API 测试注入假后端并 monkeypatch `solver.main.回放`。
@@ -245,6 +300,12 @@ solver/
   errors.py    错误码与 HTTP 状态映射
 client/
   replay.py    curl_cffi 回放（impersonate="firefox"）+ 挑战页检测
+client-go/
+  client.go    Go 客户端：求解、按域缓存、80% 提前续期、403 自愈
+  pool.go      一致性哈希、失败摘除、健康探针、池状态
+  examples/demo/main.go  演示 CLI（solve → N 次回放 → 池状态）
+scripts/
+  run-workers.ps1  多 worker 启动器（共享同一个 SQLite 缓存）
 tests/
   test_cache.py
   test_engine_offline.py
@@ -270,15 +331,15 @@ tests/
   `fetch` 报 "Synced 0 versions"，求解以 `SOLVE_FAILED` 失败；导出
   `GITHUB_TOKEN` 可解除限制（Camoufox 会转发给 GitHub API）。
 
-## 路线图（v3）
+## 路线图（v3 推迟、v4 已交付 Go 侧）
+
+v3 的代理池按计划推迟：当前出口 IP 干净，且没有代理资源。
 
 - **FlareSolverr 后端。** 可选的 HTTP 后端，对接 FlareSolverr 实例；同一
   `Backend` 协议，排在 Camoufox 之后。
 - **Rust cfsolve 后端。** 纯协议求解器，作为最终回退。
 - **代理池。** 按域名粘性出口并带健康评分，使求解与回放共用同一 IP；让服务可在
   求解主机之外使用。
-- **Go 客户端。** 原生 HTTP 回放，携带缓存 UA + 饼干、提前续期、403 自愈，面向
-  高吞吐消费方。
 
 ## 说明：标识符也是中文
 

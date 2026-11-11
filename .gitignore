@@ -8,3 +8,5 @@ cache.sqlite3
 cache.sqlite3-wal
 cache.sqlite3-shm
 *.log
+logs/
+*.exe

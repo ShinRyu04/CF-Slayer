@@ -19,7 +19,8 @@ GET /replay?url=...                ──►  {status, length, challenge_page, .
 ## Requirements
 
 - Python 3.12+ (developed on 3.13, Windows)
-- ~700 MB disk for the patched Firefox once fetched
+- ~2.5 GB disk for the patched Firefox and addons once fetched
+  (1.3 GB download, 198 s on the verification machine)
 - CMake/Git Bash/PowerShell for the commands below
 
 Camoufox patches fingerprinting in Firefox's C++ layer (WebGL renderer, canvas,
@@ -34,7 +35,7 @@ Git Bash:
 cd cf-slayer
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
-.venv/Scripts/python -m camoufox fetch      # one-time, ~700 MB
+.venv/Scripts/python -m camoufox fetch      # one-time, ~1.3 GB download
 ```
 
 PowerShell:
@@ -47,6 +48,16 @@ python -m venv .venv
 ```
 
 `uv` works too: `uv venv --python 3.13 .venv && uv pip install -r requirements.txt --python .venv/Scripts/python.exe`.
+
+`camoufox fetch` resolves releases through the GitHub API. If that call is rate
+limited (anonymous IPs get 60 requests/hour), export a token first:
+
+```bash
+export GITHUB_TOKEN=$(gh auth token)   # or a personal access token
+.venv/Scripts/python -m camoufox fetch
+```
+
+Verify the installed build with `.venv/Scripts/python -m camoufox version`.
 
 ## Run
 
@@ -151,6 +162,18 @@ first, then replays (same one-retry rule).
 `CF_SLAYER_TTL_SECONDS` (1800), `CF_SLAYER_SOLVE_TIMEOUT` (120),
 `CF_SLAYER_CHALLENGE_TIMEOUT` (90), `CF_SLAYER_HEADLESS` (true).
 
+## Verified
+
+Real-site E2E on 2026-11-12, target `https://steamdb.info/` (Cloudflare-managed),
+Camoufox v156.0.1-beta.36, Python 3.13.16. Full transcript:
+[`docs/e2e-v1.md`](docs/e2e-v1.md).
+
+| Step | Result | Measured |
+|---|---|---|
+| `POST /solve` (cold) | 200, `cached=false` | 12.94 s solve, 12.98 s HTTP |
+| `POST /solve` (warm) | 200, `cached=true` | 0.0038 s HTTP |
+| `GET /replay` | 200, `challenge_page=false` | 194,161 bytes, 0.265 s |
+
 ## Tests
 
 ```bash
@@ -189,9 +212,10 @@ tests/
   multiple browsers and are not queued.
 - `/health` reports `ready` once the app is up; it does not probe the browser
   binary (`python -m camoufox fetch` must have been run).
-- Camoufox queries GitHub release metadata at launch. If that call is rate
-  limited, solves fail with `SOLVE_FAILED`; export `GITHUB_TOKEN` to lift the
-  limit (Camoufox forwards it to the GitHub API).
+- Camoufox queries GitHub release metadata when fetching and when no browser is
+  installed. If that call is rate limited, `fetch` reports "Synced 0 versions"
+  and solves fail with `SOLVE_FAILED`; export `GITHUB_TOKEN` to lift the limit
+  (Camoufox forwards it to the GitHub API).
 
 ## Roadmap (v2)
 

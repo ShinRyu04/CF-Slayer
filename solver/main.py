@@ -23,8 +23,9 @@ from client.replay import ReplayResult, replay
 
 from . import __version__
 from .cache import CachedClearance, SQLiteCache
+from .chain import BackendChain
 from .config import Settings, load_settings
-from .engine import Backend, CamoufoxBackend, ClearanceResult, domain_of
+from .engine import Attempt, Backend, CamoufoxBackend, ClearanceResult, domain_of
 from .errors import (
     AUTH_MISSING,
     BAD_REQUEST,
@@ -35,6 +36,7 @@ from .errors import (
     SolveFailed,
     SolveTimeout,
 )
+from .pydoll_backend import PydollBackend
 
 log = logging.getLogger(__name__)
 
@@ -85,12 +87,13 @@ class Service:
         self.backend = backend
         self.stats = Stats()
 
-    async def solve(self, url: str) -> dict[str, Any]:
+    async def solve(self, url: str, force: bool = False) -> dict[str, Any]:
         domain = domain_of(url)
-        cached = self.cache.get(domain)
-        if cached is not None:
-            self.stats.record_hit()
-            return self._cached_response(cached)
+        if not force:
+            cached = self.cache.get(domain)
+            if cached is not None:
+                self.stats.record_hit()
+                return self._cached_response(cached)
 
         result = await self._run_backend(url)
         cached = self._store(domain, result)
@@ -101,6 +104,7 @@ class Service:
             "expires_in": cached.remaining(),
             "cached": False,
             "solve_seconds": round(result.solve_seconds, 2),
+            "attempts": [attempt.as_dict() for attempt in result.attempts],
         }
 
     async def replay(self, url: str) -> dict[str, Any]:
@@ -146,6 +150,7 @@ class Service:
             "expires_in": cached.remaining(),
             "cached": True,
             "solve_seconds": 0.0,
+            "attempts": [],
         }
 
     async def _run_backend(self, url: str) -> ClearanceResult:
@@ -155,10 +160,10 @@ class Service:
             )
         except SolveTimeout as exc:
             self.stats.record_error()
-            raise ApiError(SOLVE_TIMEOUT, str(exc)) from exc
+            raise ApiError(SOLVE_TIMEOUT, str(exc), extra=_attempts_extra(exc)) from exc
         except SolveFailed as exc:
             self.stats.record_error()
-            raise ApiError(SOLVE_FAILED, str(exc)) from exc
+            raise ApiError(SOLVE_FAILED, str(exc), extra=_attempts_extra(exc)) from exc
         except Exception as exc:
             self.stats.record_error()
             log.exception("backend raised an unexpected error")
@@ -218,6 +223,43 @@ async def require_token(request: Request) -> str:
 Auth = Annotated[str, Depends(require_token)]
 
 
+def _attempts_extra(exc: BaseException) -> dict[str, object]:
+    attempts = getattr(exc, "attempts", None)
+    if not attempts:
+        return {}
+    return {"attempts": [a.as_dict() if isinstance(a, Attempt) else a for a in attempts]}
+
+
+def build_backend(settings: Settings) -> Backend:
+    """Build the configured chain. Unknown names are skipped, not fatal."""
+    chain: list[Backend] = []
+    for name in settings.backend_names:
+        if name == "camoufox":
+            chain.append(
+                CamoufoxBackend(
+                    headless=settings.headless,
+                    challenge_timeout=settings.challenge_timeout,
+                    poll_interval=settings.poll_interval,
+                )
+            )
+        elif name == "pydoll":
+            chain.append(
+                PydollBackend(
+                    headless=settings.headless,
+                    challenge_timeout=settings.challenge_timeout,
+                    poll_interval=settings.poll_interval,
+                    chrome_path=settings.chrome_path or None,
+                )
+            )
+        else:
+            log.warning("unknown backend %r in CF_SLAYER_BACKENDS; ignored", name)
+    if not chain:
+        raise RuntimeError(
+            "no usable backends configured; set CF_SLAYER_BACKENDS=camoufox,pydoll"
+        )
+    return BackendChain(chain)
+
+
 def create_app(
     settings: Settings | None = None,
     backend: Backend | None = None,
@@ -226,11 +268,7 @@ def create_app(
     settings = settings or load_settings()
     if not settings.auth_token:
         raise RuntimeError("auth token is empty; use load_settings() or pass one explicitly")
-    backend = backend or CamoufoxBackend(
-        headless=settings.headless,
-        challenge_timeout=settings.challenge_timeout,
-        poll_interval=settings.poll_interval,
-    )
+    backend = backend or build_backend(settings)
     cache = cache or SQLiteCache(settings.cache_path, settings.ttl_seconds)
     service = Service(settings, cache, backend)
 

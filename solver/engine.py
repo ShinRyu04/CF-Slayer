@@ -24,12 +24,31 @@ BrowserFactory = Callable[[], AbstractContextManager[Any]]
 
 
 @dataclass(frozen=True, slots=True)
+class Attempt:
+    """One backend try inside a chain. ``error`` is None only when ``ok``."""
+
+    backend: str
+    ok: bool
+    error: str | None
+    seconds: float
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "backend": self.backend,
+            "ok": self.ok,
+            "error": self.error,
+            "seconds": round(self.seconds, 3),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class ClearanceResult:
     clearance: str
     user_agent: str
     domain: str
     expires_in: int
     solve_seconds: float
+    attempts: tuple[Attempt, ...] = ()
 
 
 @runtime_checkable

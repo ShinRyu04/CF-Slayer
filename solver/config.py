@@ -32,6 +32,14 @@ class Settings(BaseSettings):
     headless: bool = True
     auth_token: str = ""
 
+    # v2: ordered backend chain.
+    backends: str = "camoufox,pydoll"
+    chrome_path: str = ""
+
+    @property
+    def backend_names(self) -> list[str]:
+        return [part.strip().lower() for part in self.backends.split(",") if part.strip()]
+
 
 def ensure_token(env_file: Path = DEFAULT_ENV_FILE, settings: Settings | None = None) -> str:
     """Return the bearer token, generating one into ``.env`` on first run.

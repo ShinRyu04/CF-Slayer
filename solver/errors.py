@@ -21,14 +21,23 @@ STATUS_BY_CODE = {
 class ApiError(Exception):
     """An error that maps directly onto an HTTP response."""
 
-    def __init__(self, code: str, message: str, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        status_code: int | None = None,
+        extra: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code if status_code is not None else STATUS_BY_CODE.get(code, 500)
+        self.extra = extra or {}
 
-    def payload(self) -> dict[str, dict[str, str]]:
-        return {"error": {"code": self.code, "message": self.message}}
+    def payload(self) -> dict[str, dict[str, object]]:
+        body: dict[str, object] = {"code": self.code, "message": self.message}
+        body.update(self.extra)
+        return {"error": body}
 
 
 class SolveError(Exception):

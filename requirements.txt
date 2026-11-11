@@ -1,10 +1,12 @@
 # Runtime dependencies, pinned. Camoufox fights Cloudflare's fingerprinting, so
 # its version (and the Playwright it drives) must not drift silently.
+# pydoll-python is the optional CDP fallback backend (import name: pydoll).
 fastapi==0.162.4
 uvicorn[standard]==0.54.0
 camoufox==0.5.8
 playwright==1.62.0
 curl-cffi==0.17.0
+pydoll-python==3.0.1
 pydantic-settings==2.16.2
 python-dotenv==1.2.4
 

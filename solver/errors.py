@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 #: JSON 响应体中暴露的错误码：{"error": {"code": ..., "message": ...}}
 SOLVE_TIMEOUT = "SOLVE_TIMEOUT"
 SOLVE_FAILED = "SOLVE_FAILED"
@@ -50,3 +52,15 @@ class 求解超时(求解错误):
 
 class 求解失败(求解错误):
     """后端运行了，但没有产出凭据。"""
+
+
+class 令牌不受支持(求解失败):
+    """没有任何后端能产出 Turnstile 令牌。
+
+    ``尝试记录`` 保留每个被跳过后端的原因，便于调用方判断是配置问题
+    还是能力问题。
+    """
+
+    def __init__(self, 消息: str, 尝试记录: Sequence[object] = ()) -> None:
+        super().__init__(消息)
+        self.尝试记录 = tuple(尝试记录)

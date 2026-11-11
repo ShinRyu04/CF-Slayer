@@ -6,7 +6,9 @@ FastAPI 层会在工作线程里调用。
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager
@@ -51,6 +53,19 @@ class 放行结果:
     尝试记录: tuple[单次尝试, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class 令牌结果:
+    """一次 Turnstile 求解的产物。
+
+    令牌是一次性的：消费方必须用同一个 ``用户代理`` 回放，否则 CF 会拒绝。
+    这里没有剩余秒数——令牌只需立即用掉，不做续期。
+    """
+
+    令牌: str
+    用户代理: str
+    耗时秒: float
+
+
 @runtime_checkable
 class 后端(Protocol):
     """把网址变成一个 ``cf_clearance`` 凭据的后端。
@@ -64,10 +79,96 @@ class 后端(Protocol):
     def 求解(self, 网址: str, 超时: float = 120.0) -> 放行结果: ...
 
 
+@runtime_checkable
+class 令牌后端(Protocol):
+    """能产出 Turnstile 一次性令牌的后端。
+
+    这是独立协议：``后端`` 保持不变，不认识 Turnstile 的旧后端与测试桩
+    仍然满足 ``后端``。链路用 ``支持令牌`` 探测能力。
+    """
+
+    名称: str
+
+    def 求解令牌(self, 网址: str, sitekey: str, 超时: float = 60.0) -> 令牌结果: ...
+
+
+def 支持令牌(对象: object) -> bool:
+    """后端是否实现了 ``令牌后端``。"""
+    return isinstance(对象, 令牌后端)
+
+
 def 提取域名(网址: str) -> str:
     """缓存键：小写主机名，不含端口，不含协议。"""
     主机名 = urlsplit(网址).hostname or ""
     return 主机名.lower().rstrip(".")
+
+
+_站点密钥模式 = re.compile(r"^0x[0-9a-zA-Z]{20,}$")
+
+_组件地址 = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+
+_输入标签模式 = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
+_响应名模式 = re.compile(
+    r"""\bname\s*=\s*(?:"cf-turnstile-response"|'cf-turnstile-response'|cf-turnstile-response)""",
+    re.IGNORECASE,
+)
+_值模式 = re.compile(
+    r"""\bvalue\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""", re.IGNORECASE
+)
+
+
+def 提取令牌(页面正文: str) -> str | None:
+    """从页面 HTML 的隐藏输入里取出 Turnstile 令牌。
+
+    纯函数，不依赖浏览器；属性顺序与引号风格都不敏感。
+    """
+    for 标签 in _输入标签模式.findall(页面正文):
+        if _响应名模式.search(标签) is None:
+            continue
+        匹配 = _值模式.search(标签)
+        if 匹配 is None:
+            continue
+        值 = next((组 for 组 in 匹配.groups() if 组 is not None), "").strip()
+        if 值:
+            return 值
+    return None
+
+
+_加载组件脚本 = """() => new Promise((resolve) => {
+  if (window.turnstile) { resolve("ready"); return; }
+  const script = document.createElement("script");
+  script.src = """ + json.dumps(_组件地址) + """;
+  script.async = true;
+  script.onload = () => resolve(window.turnstile ? "ready" : "failed");
+  script.onerror = () => resolve("failed");
+  document.head.appendChild(script);
+  setTimeout(() => resolve(window.turnstile ? "ready" : "failed"), 10000);
+})"""
+
+_渲染组件前缀 = """() => {
+  if (!window.turnstile) { return "missing"; }
+  let box = document.getElementById("cf-slayer-turnstile");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "cf-slayer-turnstile";
+    document.body.appendChild(box);
+  }
+  window.__cfSlayerToken = "";
+  window.turnstile.render("#cf-slayer-turnstile", {
+    sitekey: """
+
+_渲染组件后缀 = """,
+    callback: (token) => { window.__cfSlayerToken = token || ""; },
+    "error-callback": () => { window.__cfSlayerToken = ""; },
+  });
+  return "rendered";
+}"""
+
+
+def _渲染脚本(sitekey: str) -> str:
+    return _渲染组件前缀 + json.dumps(sitekey) + _渲染组件后缀
+
+_读取回调令牌脚本 = '() => window.__cfSlayerToken || ""'
 
 
 def _默认浏览器工厂(无头: bool) -> 浏览器工厂:
@@ -90,12 +191,16 @@ class Camoufox后端:
         无头: bool = True,
         挑战超时: float = 90.0,
         轮询间隔: float = 2.0,
+        令牌超时: float = 60.0,
+        令牌轮询间隔: float = 1.0,
         工厂: 浏览器工厂 | None = None,
     ) -> None:
-        if 挑战超时 <= 0 or 轮询间隔 <= 0:
-            raise ValueError("挑战超时与轮询间隔必须为正数")
+        if min(挑战超时, 轮询间隔, 令牌超时, 令牌轮询间隔) <= 0:
+            raise ValueError("挑战超时、轮询间隔、令牌超时与令牌轮询间隔必须为正数")
         self._挑战超时 = 挑战超时
         self._轮询间隔 = 轮询间隔
+        self._令牌超时 = 令牌超时
+        self._令牌轮询间隔 = 令牌轮询间隔
         self._浏览器工厂 = 工厂 or _默认浏览器工厂(无头)
 
     def 求解(self, 网址: str, 超时: float = 120.0) -> 放行结果:
@@ -134,6 +239,100 @@ class Camoufox后端:
             剩余秒数=剩余秒数,
             耗时秒=round(time.monotonic() - 开始时刻, 3),
         )
+
+    def 求解令牌(
+        self, 网址: str, sitekey: str, 超时: float = 60.0
+    ) -> 令牌结果:
+        """打开目标页、显式渲染 Turnstile、轮询隐藏输入直到拿到令牌。
+
+        令牌一次性，因此每次调用都新建页面与上下文，绝不复用。
+        """
+        if 超时 <= 0:
+            raise ValueError("超时必须为正数")
+        if not _站点密钥模式.fullmatch(sitekey):
+            raise 求解失败(f"sitekey 格式无效：{sitekey!r}")
+        开始时刻 = time.monotonic()
+        令牌截止时刻 = min(开始时刻 + 超时, 开始时刻 + self._令牌超时)
+        域名 = 提取域名(网址)
+        if not 域名:
+            raise 求解失败(f"无法从 {网址!r} 解析出域名")
+
+        try:
+            with self._浏览器工厂() as 浏览器:
+                上下文 = 浏览器.new_context()
+                try:
+                    页面 = 上下文.new_page()
+                    跳转毫秒 = int(
+                        max(1.0, min(45.0, 令牌截止时刻 - time.monotonic())) * 1000
+                    )
+                    # 先落在空白页，避免目标站自身的 Turnstile 自动渲染，
+                    # 再导航到目标地址，由我们显式渲染同一个 sitekey。
+                    页面.goto("about:blank", wait_until="domcontentloaded", timeout=跳转毫秒)
+                    页面.goto(网址, wait_until="domcontentloaded", timeout=跳转毫秒)
+                    令牌, 用户代理 = self._等待令牌(
+                        页面, sitekey, 令牌截止时刻, 网址
+                    )
+                finally:
+                    self._安静关闭(上下文)
+        except (求解超时, 求解失败):
+            raise
+        except Exception as 异常:  # 浏览器崩溃、导航失败、启动参数错误
+            if time.monotonic() >= 令牌截止时刻:
+                raise 求解超时(
+                    f"{域名} 的 Turnstile 求解超过 {self._令牌超时:.0f} 秒"
+                ) from 异常
+            raise 求解失败(
+                f"camoufox Turnstile 异常：{type(异常).__name__}: {异常}"
+            ) from 异常
+
+        return 令牌结果(
+            令牌=令牌,
+            用户代理=用户代理,
+            耗时秒=round(time.monotonic() - 开始时刻, 3),
+        )
+
+    def _等待令牌(
+        self, 页面: Any, sitekey: str, 截止时刻: float, 网址: str
+    ) -> tuple[str, str]:
+        状态 = 页面.evaluate(_加载组件脚本)
+        if 状态 != "ready":
+            raise 求解失败(f"Turnstile 组件加载失败（状态 {状态!r}）")
+
+        状态 = 页面.evaluate(_渲染脚本(sitekey))
+        if 状态 != "rendered":
+            raise 求解失败(f"Turnstile 渲染失败（状态 {状态!r}）")
+
+        while True:
+            令牌 = 提取令牌(self._读取正文(页面)) or self._读取回调令牌(页面)
+            if 令牌:
+                用户代理 = self._读取用户代理(页面)
+                if 用户代理:
+                    return 令牌, 用户代理
+            当前时刻 = time.monotonic()
+            if 当前时刻 >= 截止时刻:
+                raise 求解超时(
+                    f"{网址} 在 {self._令牌超时:.0f} 秒内未产出 Turnstile 令牌"
+                )
+            # 睡到截止时刻为止，避免最后一次轮询越过时限。
+            页面.wait_for_timeout(
+                int(max(1.0, min(self._令牌轮询间隔, 截止时刻 - 当前时刻)) * 1000)
+            )
+
+    @staticmethod
+    def _读取正文(页面: Any) -> str:
+        try:
+            return str(页面.content() or "")
+        except Exception as 异常:
+            日志.debug("读取页面正文失败：%s", 异常)
+            return ""
+
+    def _读取回调令牌(self, 页面: Any) -> str:
+        try:
+            值 = 页面.evaluate(_读取回调令牌脚本)
+        except Exception as 异常:
+            日志.debug("读取 Turnstile 回调令牌失败：%s", 异常)
+            return ""
+        return str(值).strip() if isinstance(值, str) else ""
 
     def _等待放行(
         self,

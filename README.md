@@ -1,5 +1,11 @@
 # cf-slayer
 
+[![CI](https://img.shields.io/github/actions/workflow/status/Zyrex/cf-slayer/ci.yml?branch=main&label=CI)](https://github.com/Zyrex/cf-slayer/actions/workflows/ci.yml)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB)](https://www.python.org/)
+[![Go 1.23](https://img.shields.io/badge/go-1.23-00ADD8)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230)](https://github.com/astral-sh/ruff)
+
 Cloudflare 放行凭据求解与回放服务。它驱动浏览器通过挑战，收割 `cf_clearance`
 饼干和赢得它的那个精确 User-Agent，按域名缓存两者 30 分钟，再用 `curl_cffi`
 （Firefox TLS 指纹）回放该凭据。
@@ -391,6 +397,14 @@ v3 的代理池按计划推迟：当前出口 IP 干净，且没有代理资源�
 这是刻意的整活。公开契约保持 ASCII 不变：JSON 键、错误码、环境变量名、SQL
 表/列名、端点路径、HTTP 头、`配置` 的字段名（pydantic 环境映射依赖它们）、
 模块路径与 ASGI 属性 `app`。因此现有客户端与首次运行行为不受影响。
+
+## Languages
+
+Comments and Python identifiers in this repository are written in Simplified
+Chinese. The public interface is English: JSON field names, error codes,
+environment variables, endpoint paths, SQL schema, and Go identifiers. This is
+a naming convention, not a localization layer; clients never need to parse
+Chinese text.
 
 ## 许可证
 

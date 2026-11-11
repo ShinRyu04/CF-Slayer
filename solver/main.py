@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import secrets
 import threading
 import time
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -36,6 +37,7 @@ from .errors import (
     SolveFailed,
     SolveTimeout,
 )
+from .prewarm import PrewarmWorker
 from .pydoll_backend import PydollBackend
 
 log = logging.getLogger(__name__)
@@ -51,6 +53,7 @@ class Stats:
     cache_hits: int = 0
     solves: int = 0
     errors: int = 0
+    prewarm_errors: int = 0
     total_solve_seconds: float = 0.0
     started_at: float = field(default_factory=time.time)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -68,6 +71,10 @@ class Stats:
         with self._lock:
             self.errors += 1
 
+    def record_prewarm_error(self) -> None:
+        with self._lock:
+            self.prewarm_errors += 1
+
     def snapshot(self) -> dict[str, int | float]:
         with self._lock:
             avg = self.total_solve_seconds / self.solves if self.solves else 0.0
@@ -75,6 +82,7 @@ class Stats:
                 "cache_hits": self.cache_hits,
                 "solves": self.solves,
                 "errors": self.errors,
+                "prewarm_errors": self.prewarm_errors,
                 "avg_solve_seconds": round(avg, 2),
                 "uptime_seconds": round(time.time() - self.started_at, 1),
             }
@@ -271,14 +279,37 @@ def create_app(
     backend = backend or build_backend(settings)
     cache = cache or SQLiteCache(settings.cache_path, settings.ttl_seconds)
     service = Service(settings, cache, backend)
+    prewarm: PrewarmWorker | None = None
+    if settings.prewarm_targets:
+        prewarm = PrewarmWorker(
+            service,
+            settings.prewarm_targets,
+            margin_seconds=settings.prewarm_margin,
+            interval=settings.prewarm_interval,
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
-        cache.close()
+        stop = asyncio.Event()
+        task: asyncio.Task[None] | None = None
+        if prewarm is not None:
+            task = asyncio.create_task(prewarm.run(stop))
+        try:
+            yield
+        finally:
+            stop.set()
+            if task is not None:
+                try:
+                    await asyncio.wait_for(task, timeout=5)
+                except TimeoutError:
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+            cache.close()
 
     app = FastAPI(title="cf-slayer", version=__version__, lifespan=lifespan)
     app.state.service = service
+    app.state.prewarm = prewarm
 
     @app.exception_handler(ApiError)
     async def _api_error(_: Request, exc: ApiError) -> JSONResponse:

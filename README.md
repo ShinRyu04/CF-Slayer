@@ -8,7 +8,8 @@ with `curl_cffi` (Firefox TLS fingerprint).
 Backends are tried in order (`CF_SLAYER_BACKENDS`, default `camoufox,pydoll`).
 Camoufox (stealth Firefox) comes first; pydoll drives an installed Chrome over CDP
 and is skipped when Chrome or the package is missing. Every try is reported in the
-response's `attempts` array.
+response's `attempts` array. An optional background worker renews cached domains
+before their credentials expire.
 
 ```
 POST /solve  {url}    ──►  {clearance, user_agent, domain, expires_in, cached, attempts[]}
@@ -17,6 +18,8 @@ POST /solve  {url}    ──►  {clearance, user_agent, domain, expires_in, cac
                    ├─ camoufox: stealth Firefox → goto → poll cf_clearance → UA
                    └─ pydoll: installed Chrome → same cookie poll (skipped if absent)
                         └─► SQLite cache (per domain, TTL 30 min)
+
+PrewarmWorker (CF_SLAYER_PREWARM_DOMAINS) ──► renew entries inside the margin
 
 GET /replay?url=...    ──►  {status, length, challenge_page, ...}
       └─ cached cookie + solve-time UA ─► target
@@ -99,7 +102,7 @@ icacls .env /inheritance:r /grant:r "$env:USERNAME:F"
 | POST | `/solve` | Bearer | Solve and cache a clearance |
 | GET | `/replay?url=...` | Bearer | Fetch the target with the cached credential |
 | GET | `/health` | none | `{"state":"ready","browser":"camoufox"}` |
-| GET | `/stats` | Bearer | cache hits, solves, errors, average solve time |
+| GET | `/stats` | Bearer | cache hits, solves, errors, prewarm errors, average solve time |
 
 ### curl examples
 
@@ -173,7 +176,9 @@ first, then replays (same one-retry rule).
 [`.env.example`](.env.example). Notable knobs: `CF_SLAYER_PORT` (8878),
 `CF_SLAYER_TTL_SECONDS` (1800), `CF_SLAYER_SOLVE_TIMEOUT` (120),
 `CF_SLAYER_CHALLENGE_TIMEOUT` (90), `CF_SLAYER_HEADLESS` (true),
-`CF_SLAYER_BACKENDS` (`camoufox,pydoll`), `CF_SLAYER_CHROME_PATH` (auto).
+`CF_SLAYER_BACKENDS` (`camoufox,pydoll`), `CF_SLAYER_CHROME_PATH` (auto),
+`CF_SLAYER_PREWARM_DOMAINS` (off), `CF_SLAYER_PREWARM_MARGIN` (300),
+`CF_SLAYER_PREWARM_INTERVAL` (60).
 
 ## Backends
 
@@ -191,6 +196,17 @@ Unknown names are logged and ignored. If no backend remains, startup fails with 
 clear `RuntimeError`. A failed chain returns `SOLVE_FAILED` (or `SOLVE_TIMEOUT`
 when every backend timed out) with per-backend errors in `error.attempts`.
 
+## Prewarm
+
+Set `CF_SLAYER_PREWARM_DOMAINS` to a comma-separated list of domains or full URLs
+(`steamdb.info,https://example.com/`). While the service runs, a background worker
+checks each cached entry and solves again when it is missing or has less than
+`CF_SLAYER_PREWARM_MARGIN` seconds left. It sleeps `CF_SLAYER_PREWARM_INTERVAL`
+between passes, tracks in-flight domains so passes cannot duplicate a solve, and
+counts failures under `prewarm_errors` in `/stats` without stopping the loop.
+Prewarm bypasses the cache read (`force=True`) so a still-valid but near-expiry
+credential is actually renewed.
+
 ## Verified
 
 Real-site E2E on 2026-11-12, target `https://steamdb.info/` (Cloudflare-managed),
@@ -207,8 +223,10 @@ v2 acceptance checks (2026-11-12, same machine, offline/local only):
 
 | Check | Result |
 |---|---|
-| Full offline suite | 59 passed, ruff clean (v1's 36 unchanged) |
+| Full offline suite | 70 passed, ruff clean (v1's 36 unchanged) |
 | pydoll-only with `CF_SLAYER_CHROME_PATH` pointing at nothing | 502 `SOLVE_FAILED`, `attempts[0].backend="pydoll"`, error names the path; startup unaffected |
+| Prewarm against a local cookie-issuing server, `TTL=30 s`, interval 5 s | 2 renewals in 18.5 s, `cached_domains=1`, `prewarm_errors=0`; consumer `/solve` returned `cached=true`, 28 s left, `cache_hits=1` |
+
 The pydoll backend itself was exercised against `https://example.com` (Chrome 157
 launch, cookie read, `navigator.userAgent`); it has not yet solved a live
 Cloudflare challenge, so treat it as a fallback, not a replacement.
@@ -216,12 +234,13 @@ Cloudflare challenge, so treat it as a fallback, not a replacement.
 ## Tests
 
 ```bash
-.venv/Scripts/python -m pytest     # 59 offline tests, no browser, no network
+.venv/Scripts/python -m pytest     # 70 offline tests, no browser, no network
 .venv/Scripts/ruff check .
 ```
 
 The engine tests inject a fake browser factory; API tests inject a fake backend
-and patch `solver.main.replay`. Chain tests use stub backends. Nothing contacts a Cloudflare-protected site; the pydoll
+and patch `solver.main.replay`. Chain and prewarm tests use stub backends and a
+temporary SQLite cache. Nothing contacts a Cloudflare-protected site; the pydoll
 detection test skips when no Chrome is installed.
 
 ## Project layout
@@ -232,6 +251,7 @@ solver/
   engine.py    Backend protocol + Attempt trace + CamoufoxBackend
   chain.py     BackendChain: ordered fallback, skip unavailable, aggregate attempts
   pydoll_backend.py  PydollBackend: installed Chrome over CDP, Chrome/UA detection
+  prewarm.py   PrewarmWorker: margin-based renewal loop
   cache.py     SQLiteCache: WAL, TTL, thread-safe, per-domain
   config.py    pydantic-settings + first-run token generation into .env
   errors.py    error codes and HTTP status mapping
@@ -244,6 +264,7 @@ tests/
   test_replay.py
   test_chain.py
   test_pydoll.py
+  test_prewarm.py
 ```
 
 ## Limits (v2)
@@ -251,6 +272,9 @@ tests/
 - Turnstile / reCAPTCHA / AWS WAF tokens are not produced.
 - pydoll is best-effort: it overrides the UA, but stock Chrome is not fingerprint-patched the way Camoufox is, so it may be
   challenged harder. Camoufox stays first in the default chain.
+- Prewarm is in-process and interval-based, not a durable scheduler: it starts
+  with the app, acts per pass, and restarts with the process. Every renewal is a
+  full solve and consumes the same backend budget as a request.
 - No proxy pool and no egress pinning; IP-bound clearances only work from the
   solving host.
 - One browser process per solve (no pooling); concurrent solves fan out to

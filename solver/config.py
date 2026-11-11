@@ -32,13 +32,20 @@ class Settings(BaseSettings):
     headless: bool = True
     auth_token: str = ""
 
-    # v2: ordered backend chain.
+    # v2: ordered backend chain, prewarm.
     backends: str = "camoufox,pydoll"
     chrome_path: str = ""
+    prewarm_domains: str = ""
+    prewarm_margin: int = 300
+    prewarm_interval: float = 60.0
 
     @property
     def backend_names(self) -> list[str]:
         return [part.strip().lower() for part in self.backends.split(",") if part.strip()]
+
+    @property
+    def prewarm_targets(self) -> list[str]:
+        return [part.strip() for part in self.prewarm_domains.split(",") if part.strip()]
 
 
 def ensure_token(env_file: Path = DEFAULT_ENV_FILE, settings: Settings | None = None) -> str:

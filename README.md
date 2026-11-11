@@ -1,4 +1,4 @@
-# cf-slayer
+# CF-Slayer
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ShinRyu04/Cloudflare-Bitch/ci.yml?branch=main&label=CI)](https://github.com/ShinRyu04/Cloudflare-Bitch/actions/workflows/ci.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB)](https://www.python.org/)

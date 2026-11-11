@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Zyrex/cf-slayer/ci.yml?branch=main&label=CI)](https://github.com/Zyrex/cf-slayer/actions/workflows/ci.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB)](https://www.python.org/)
 [![Go 1.23](https://img.shields.io/badge/go-1.23-00ADD8)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![License: GPL v3](https://img.shields.io/badge/license-GPL%20v3-blue.svg)](LICENSE)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230)](https://github.com/astral-sh/ruff)
 
 Cloudflare 放行凭据求解与回放服务。它驱动浏览器通过挑战，收割 `cf_clearance`
@@ -408,4 +408,4 @@ Chinese text.
 
 ## 许可证
 
-MIT。
+GPL-3.0。完整文本见 [LICENSE](LICENSE)。

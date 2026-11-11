@@ -28,3 +28,8 @@ websites. Keep them that way; the browser is only exercised by hand.
 
 Report security issues privately as described in [SECURITY.md](SECURITY.md),
 not in a public issue.
+
+## License
+
+By contributing, you agree that your contributions are licensed under the
+GPL-3.0 License that covers this project (see [LICENSE](LICENSE)).

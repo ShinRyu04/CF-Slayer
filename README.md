@@ -1,6 +1,6 @@
 # cf-slayer
 
-[![CI](https://img.shields.io/github/actions/workflow/status/Zyrex/cf-slayer/ci.yml?branch=main&label=CI)](https://github.com/Zyrex/cf-slayer/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/ShinRyu04/Cloudflare-Bitch/ci.yml?branch=main&label=CI)](https://github.com/ShinRyu04/Cloudflare-Bitch/actions/workflows/ci.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-3776AB)](https://www.python.org/)
 [![Go 1.23](https://img.shields.io/badge/go-1.23-00ADD8)](https://go.dev/)
 [![License: GPL v3](https://img.shields.io/badge/license-GPL%20v3-blue.svg)](LICENSE)

@@ -7,6 +7,7 @@
 // 与服务端的契约来自 solver/main.py 的响应体：
 //
 //	POST /solve  -> {clearance, user_agent, domain, expires_in, cached, solve_seconds, attempts}
+//	POST /solve (want=turnstile) -> {want, token, user_agent, domain, solve_seconds, cached}
 //	错误体       -> {"error": {code, message, attempts?}}
 //
 // 字段名必须与服务端完全一致；本包只用了客户端需要的子集。
@@ -38,6 +39,18 @@ type Credential struct {
 	Cached    bool   `json:"cached"`
 }
 
+// Token 是一次性 Turnstile 令牌。
+//
+// 令牌首次使用即被消费，不能缓存、不能续期，也不能换 User-Agent 使用；
+// 因此本结构没有过期时间，Cached 恒为 false。消费方必须用 UserAgent 回放。
+type Token struct {
+	Token        string  `json:"token"`
+	UserAgent    string  `json:"user_agent"`
+	Domain       string  `json:"domain"`
+	SolveSeconds float64 `json:"solve_seconds"`
+	Cached       bool    `json:"cached"`
+}
+
 // Attempt 是服务端 attempts 数组中的一条。失败时用于诊断。
 type Attempt struct {
 	Backend string  `json:"backend"`
@@ -65,6 +78,22 @@ func (e *APIError) Error() string {
 type solveRequest struct {
 	URL  string `json:"url"`
 	Want string `json:"want"`
+}
+
+// turnstileRequest 是 want=turnstile 的请求体。
+type turnstileRequest struct {
+	URL     string `json:"url"`
+	Want    string `json:"want"`
+	Sitekey string `json:"sitekey"`
+}
+
+type turnstileResponse struct {
+	Want         string  `json:"want"`
+	Token        string  `json:"token"`
+	UserAgent    string  `json:"user_agent"`
+	Domain       string  `json:"domain"`
+	SolveSeconds float64 `json:"solve_seconds"`
+	Cached       bool    `json:"cached"`
 }
 
 type solveResponse struct {
@@ -159,6 +188,69 @@ func (c *Client) Solve(ctx context.Context, rawURL string) (Credential, error) {
 	e.mu.Unlock()
 	c.armRenewal(e, rawURL, cred.ExpiresIn)
 	return cred, nil
+}
+
+// SolveTurnstile 请求一次性的 Turnstile 令牌。
+//
+// 与 Solve 不同：不读也不写内存缓存，不安排提前续期，每次调用都是一次
+// 独立的 HTTP 请求。令牌由服务端现场求解，返回后立即交给调用方使用。
+func (c *Client) SolveTurnstile(ctx context.Context, rawURL, sitekey string) (Token, error) {
+	if _, err := domainOf(rawURL); err != nil {
+		return Token{}, err
+	}
+	sitekey = strings.TrimSpace(sitekey)
+	if sitekey == "" {
+		return Token{}, errors.New("cf-slayer: sitekey 不能为空")
+	}
+
+	body, err := json.Marshal(turnstileRequest{
+		URL:     rawURL,
+		Want:    "turnstile",
+		Sitekey: sitekey,
+	})
+	if err != nil {
+		return Token{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/solve", bytes.NewReader(body))
+	if err != nil {
+		return Token{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return Token{}, fmt.Errorf("cf-slayer: 请求令牌服务失败: %w", err)
+	}
+	defer closeBody(resp)
+
+	payload, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return Token{}, fmt.Errorf("cf-slayer: 读取令牌响应失败: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return Token{}, decodeAPIError(resp.StatusCode, payload)
+	}
+	var out turnstileResponse
+	if err := json.Unmarshal(payload, &out); err != nil {
+		return Token{}, fmt.Errorf("cf-slayer: 令牌响应不是合法 JSON: %w", err)
+	}
+	if out.Want != "turnstile" {
+		return Token{}, fmt.Errorf("cf-slayer: 令牌响应的 want 异常: %q", out.Want)
+	}
+	if out.Token == "" || out.UserAgent == "" {
+		return Token{}, errors.New("cf-slayer: 服务端返回了空令牌或空 User-Agent")
+	}
+	// 令牌不可缓存：即便服务端误报 cached=true，也强制归零。
+	out.Cached = false
+	return Token{
+		Token:        out.Token,
+		UserAgent:    out.UserAgent,
+		Domain:       out.Domain,
+		SolveSeconds: out.SolveSeconds,
+		Cached:       out.Cached,
+	}, nil
 }
 
 // Do 注入 cf_clearance 与求解时的 User-Agent 后执行请求。

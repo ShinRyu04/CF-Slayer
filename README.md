@@ -248,6 +248,48 @@ powershell -ExecutionPolicy Bypass -File scripts/run-workers.ps1
 `expires_in=1796`，用时 153 ms。共享依赖 SQLite WAL，不依赖进程内状态；
 v4 没有改动存储层，也未观察到写锁阻塞。
 
+## Turnstile 令牌（v5）
+
+`POST /solve` 现在有两条路：`want=clearance`（默认）与 `want=turnstile`。
+
+```bash
+curl -s http://127.0.0.1:8878/solve \
+  -H "Authorization: Bearer $CF_SLAYER_AUTH_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"want":"turnstile","url":"https://target.example/login","sitekey":"0x4AAAAAAA..."}'
+```
+
+```json
+{
+  "want": "turnstile",
+  "token": "0.xxxxx…",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:156.0) …",
+  "domain": "target.example",
+  "solve_seconds": 8.4,
+  "cached": false
+}
+```
+
+- `sitekey` 必填，格式为 `^0x[0-9a-zA-Z]{20,}$`；缺失或非法直接
+  `BAD_REQUEST`，浏览器不会启动。URL 在启动前完成绝对 http(s) 校验。我们
+  无法离线确认 sitekey 注册在哪个域名，因此不做注册校验；传错域名会让 CF
+  组件自己失败。
+- **一次性**：令牌首次使用即被消费。服务端不读也不写 SQLite；客户端不缓存、
+  不提前续期。每次 `/solve` 都是一次全新的浏览器求解，`cached` 恒为
+  `false`。
+- 令牌绑定求解会话的 User-Agent；回放时必须同时使用返回的 `user_agent`。
+- 后端链只尝试实现了令牌能力的后端；不支持的后端记入 `attempts` 并跳过。
+  全部不支持时返回 `SOLVE_FAILED`，错误体同样带 `attempts`。
+- Go 客户端：`SolveTurnstile(ctx, url, sitekey) (Token, error)`，不缓存、不
+  续期；`Do` 仍只用于 clearance 回放。
+- 统计新增 `tokens_solved`、`token_errors`，与 clearance 的计数分开。
+
+诚实说明：**没有在真实 Cloudflare 站点上验证成功**。原因：官方 always-pass
+测试 sitekey 以 `1x` 开头（`1x00000000000000000000AA`），而本服务的契约只接受
+`0x` 开头的正式 sitekey；该请求会被 `BAD_REQUEST` 提前拒绝。上述行为由 84 个
+离线 Python 测试与 20 个 Go 测试覆盖；浏览器路径只用假页面验证了组件加载、
+轮询、关闭顺序与超时。
+
 ## 已验证
 
 2026-11-12 真实站点 E2E，目标 `https://steamdb.info/`（Cloudflare 托管），
@@ -270,6 +312,8 @@ v2 验收（2026-11-12，同一机器，仅离线/本地）：
 | v4：`go test ./...` | 15 个离线测试通过（无浏览器、无网络） |
 | v4：跨进程缓存 | worker A 求解 34.8 秒后，worker B 同域 `/solve` 返回 `cached=true`，耗时 153 ms |
 | v4：demo 中途杀 worker | 回放持续 200；池状态第 68 次由 `healthy -> down`，重启 worker 后第 150 次由 `down -> healthy` |
+| v5：`pytest` | 84 个离线测试通过（新增 14 个 Turnstile 用例） |
+| v5：`go test ./...` | 20 个离线测试通过（新增 5 个令牌用例） |
 
 pydoll 后端本身已对 `https://example.com` 实跑（Chrome 157 启动、读饼干、
 读 `navigator.userAgent`）；尚未通过真实 Cloudflare 挑战，因此视作回退而非替代。
@@ -277,9 +321,9 @@ pydoll 后端本身已对 `https://example.com` 实跑（Chrome 157 启动、读
 ## 测试
 
 ```bash
-.venv/Scripts/python -m pytest     # 70 个离线测试，无浏览器，无网络
+.venv/Scripts/python -m pytest     # 84 个离线测试，无浏览器，无网络
 .venv/Scripts/ruff check .
-cd client-go && go test ./...      # 15 个 Go 离线测试，仅标准库
+cd client-go && go test ./...      # 20 个 Go 离线测试，仅标准库
 ```
 
 引擎测试注入假浏览器工厂；API 测试注入假后端并 monkeypatch `solver.main.回放`。

@@ -1,6 +1,6 @@
 # Contributors
 
-- **ShinRyu04** — maintainer and repository owner.
+- **Muhammad Khalid ([@ShinRyu04](https://github.com/ShinRyu04))** — maintainer and repository owner.
 - **Zyrex** — original author of the commit history.
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for local
